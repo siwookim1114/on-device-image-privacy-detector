@@ -1,0 +1,138 @@
+# Privacy Guard - System Configuration
+
+# System Configuration
+system:
+  device: "cuda"  # cuda, cpu, or mps
+  device_fallback: "cpu"
+  on_device_only: true
+  enable_cloud_llm: false
+  seed: 42
+
+# Model Configurations
+models:
+  detection:
+    face_detector: "mtcnn"
+    text_detector: "easyocr"
+    object_detector: "yolov8n"
+    confidence_threshold: 0.7
+    
+  risk_assessment:
+    name: "microsoft/Phi-3.5-vision-instruct"
+    quantization: "4bit"
+    max_memory_gb: 4
+    
+  face_recognition:
+    name: "facenet"
+    embedding_size: 512
+    similarity_threshold: 0.85
+    confident_threshold: 0.90
+    
+  strategy:
+    name: "microsoft/Phi-3-mini-4k-instruct"
+    quantization: "4bit"
+    max_memory_gb: 3
+
+# Risk Levels
+risk_levels:
+  critical:
+    color: "#FF0000"
+    priority: 1
+    requires_protection: true
+    user_can_override: false
+  high:
+    color: "#FF6600"
+    priority: 2
+    requires_protection: true
+    user_can_override: true
+  medium:
+    color: "#FFD700"
+    priority: 3
+    requires_protection: false
+    user_can_override: true
+  low:
+    color: "#90EE90"
+    priority: 4
+    requires_protection: false
+    user_can_override: true
+
+# Ethical Modes
+ethical_modes:
+  strict:
+    name: "No Deception"
+    allowed: ["blur", "pixelate", "solid_overlay"]
+    forbidden: ["inpaint", "generative_replace"]
+  balanced:
+    name: "Context-Preserving"
+    allowed: ["blur", "pixelate", "solid_overlay", "avatar_replace", "inpaint"]
+    forbidden: ["misleading_changes"]
+  creative:
+    name: "Full Power"
+    allowed: "all"
+    requires_watermark: true
+
+# Obfuscation Methods
+obfuscation:
+  blur:
+    strengths: ["light", "medium", "strong", "adaptive"]
+    kernel_sizes: [15, 25, 35, 51]
+  pixelate:
+    block_sizes: [8, 12, 16, 20, 24, 32]
+    default_size: 16
+  solid_overlay:
+    colors:
+      black: "#000000"
+      gray: "#808080"
+    default_color: "black"
+  inpaint:
+    method: "lama"
+  avatar_replace:
+    styles: ["cartoon", "emoji", "silhouette"]
+
+# Storage Configuration
+storage:
+  face_database_path: "data/face_db/faces.db"
+  encryption_enabled: true
+  encryption_key_path: "data/face_db/.encryption_key"
+  max_embeddings_per_person: 5
+  privacy_profile_path: "data/privacy_profile.json"
+  provenance_logs_path: "data/provenance_logs/"
+
+# Pipeline Settings
+pipeline:
+  max_image_size: 2048
+  supported_formats: ["jpg", "jpeg", "png", "webp"]
+  output_format: "png"
+  default_mode: "hybrid"
+  batch_size: 1
+  timeout_detection: 10000
+  timeout_risk_assessment: 15000
+  timeout_execution: 30000
+
+# Adaptive Learning
+learning:
+  enabled: true
+  min_appearances_for_trust: 3
+  trust_approval_threshold: 0.8
+  risk_decay_per_approval: 0.1
+  risk_increase_per_protection: 0.05
+
+# Logging
+logging:
+  level: "INFO"
+  log_to_file: true
+  log_file_path: "logs/privacy_guard.log"
+  log_rotation: "100 MB"
+  log_retention: "30 days"
+  log_sensitive_data: false
+
+# Performance
+performance:
+  enable_model_caching: true
+  cache_size_gb: 8
+  enable_mixed_precision: true
+
+# Debug
+debug:
+  enabled: false
+  save_intermediate_outputs: false
+  verbose_logging: false
