@@ -228,7 +228,7 @@ class ConsentHistory(BaseModel):
     times_appeared: int = 0
     times_approved: int = 0
     times_protected: int = 0
-    context: List[str] = Field(default_factory = list)
+    contexts: List[str] = Field(default_factory = list)
     last_consent_decision: Optional[str] = None
     consent_confidence: float = 0.0
 
