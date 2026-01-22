@@ -483,7 +483,7 @@ class PrivacyProfileDatabase:
             print(f"Failed to save profile: {e}")
             return False
     
-    def load(self):
+    def load(self) -> PrivacyProfile:
         """
         Load privacy profile from JSON
 
@@ -512,8 +512,83 @@ class PrivacyProfileDatabase:
             print(f"Failed to load profile: {e}")
             return None
     
+# Provenance Storage 
+class ProvenanceStorage:
+    """Handles storage of provenance logs"""
+    def __init__(self, logs_path: str):
+        """
+        Initialize provenance storage
+
+        Args:
+            logs_path: Directory for log
+        """
+        self.logs_path = Path(logs_path)
+        self.logs_path.mkdir(parents = True, exist_ok = True)
     
-        
+    def save(self, log: ProvenanceLog) -> bool:
+        """
+        Save provenance log
+
+        Args:
+            log: ProvenanceLog object
+
+        Returns:
+            True if successful
+        """
+        try:
+            # Create filename
+            filename = f"{log.image_id}_{log.timestamp.strftime('%Y%m%d_%H%M%S')}.json"
+            log_file = self.logs_path / filename
+
+            # Convert to dict
+            data = log.model_dump()
+
+            # Save to JSON
+            with open(log_file, "w") as f:
+                json.dump(data, f, indent = 2, default = str)
+            
+            print(f"Provenance log saved: {filename}")
+            return True
+
+        except Exception as e:
+            print(f"Failed to save provenance log: {e}")
+            return False
+    
+    def load(self, image_id: str) -> ProvenanceLog:
+        """
+        Load provenance log by image ID
+
+        Args:
+            image_id: Image unique ID
+
+        Returns:
+            ProvenanceLog object or None
+        """
+        try:
+            # Find log file
+            log_files = list(self.logs_path.glob(f"{image_id}_*.json"))
+            if not log_files:
+                return None
+            
+            # Get most recent
+            log_file = max(log_files, key = lambda p: p.stat().st_mtime)
+            with open(log_file, "r") as f:
+                data = json.load(f)
+            
+            # Convert datetime strings
+            if "timestamp" in data and isinstance(data["timestamp"], str):
+                data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+            return ProvenanceLog(**data)
+
+        except Exception as e:
+            print(f"Failed to load provenance log: {e}")
+            return None
+    
+    
+
+
+
+
         
     
 
