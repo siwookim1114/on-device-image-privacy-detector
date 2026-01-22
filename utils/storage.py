@@ -4,16 +4,19 @@ Handles encrypted face databse, privacy profiles, and provenance logs
 """
 import json
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Tuple
 from datetime import datetime
 from cryptography.fernet import Fernet
 import numpy as np
-from pymongo import MongoClient, ASCENDING, DESCENDING
+from pymongo import MongoClient, ASCENDING
 from pymongo.errors import ConnectionFailure, DuplicateKeyError
+import tempfile
+import shutil
+import sys
 
 # Utils import
-from utils.models import (
-    PrivacyProfile, PersonEntry, FaceEmbedding, ConsentHistory, ProvenanceLog
+from models import (
+    PrivacyProfile, PersonEntry, FaceEmbedding, ConsentHistory, ProvenanceLog, EthicalMode
 )
 
 # Encryption Manager
@@ -215,7 +218,7 @@ class FaceDatabase:
                 "times_appeared": person.consent_history.times_appeared,
                 "times_approved": person.consent_history.times_approved,
                 "times_protected": person.consent_history.times_protected,
-                "contexts": person.consent_history.context,
+                "contexts": person.consent_history.contexts,
                 "last_consent_decision": person.consent_history.last_consent_decision,
                 "consent_confidence": person.consent_history.consent_confidence
             }
@@ -263,7 +266,7 @@ class FaceDatabase:
                 times_protected = consent_doc["times_protected"],
                 contexts = consent_doc.get("contexts", []),
                 last_consent_decision = consent_doc.get("last_consent_decision"),
-                consent_confidence = consent_doc.get("consent_confidence, 0.0")
+                consent_confidence = consent_doc.get("consent_confidence", 0.0)
             )
 
             # Construct PersonEntry
@@ -408,7 +411,7 @@ class FaceDatabase:
             })
             persons = []
             for doc in person_docs:
-                person = self.get_person(doc[person["id"]])
+                person = self.get_person(doc["person_id"])
                 if person:
                     persons.append(person)
             return persons
@@ -450,7 +453,7 @@ class PrivacyProfileDatabase:
     """Handles storage and loading of privacy profiles"""
     def __init__(self, profile_path: str):
         """
-        Initialize profile storage
+        Initialize profile database
 
         Args:
             profile_path: Path to JSON file
@@ -513,11 +516,11 @@ class PrivacyProfileDatabase:
             return None
     
 # Provenance Storage 
-class ProvenanceStorage:
+class ProvenanceDatabase:
     """Handles storage of provenance logs"""
     def __init__(self, logs_path: str):
         """
-        Initialize provenance storage
+        Initialize provenance database
 
         Args:
             logs_path: Directory for log
@@ -584,6 +587,169 @@ class ProvenanceStorage:
             print(f"Failed to load provenance log: {e}")
             return None
     
+# Testing (integrated)
+def test_storage():
+    """Test storage modules"""
+    print("=" * 60)
+    print("Testing Storage Layer (MongoDB)")
+    print("=" * 60 + "\n")
+
+    # Create temporary directory for testing
+    test_dir = Path(tempfile.mkdtemp())
+    print(f"Test directory: {test_dir}\n")
+
+    try:
+        # Test 1: Encryption Manager
+        print("Test 1: Encryption Manager")
+        try:
+            key_path = test_dir / "test.key"
+            encryptor = EncryptionManager(str(key_path))
+            
+            # Test encryption/decryption
+            original = b"1133224 secret face embedding data [[-0.5, 2.3, 2.1]]"
+            encrypted = encryptor.encrypt(original)
+            decrypted = encryptor.decrypt(encrypted)
+
+            assert original == decrypted
+            assert original != encrypted
+            print("Encryption working\n")
+        except Exception as e:
+            print(f"Encryption failed: {e}\n")
+            return False
+        
+         # Test 2: MongoDB Face Database
+        print("Test 2: MongoDB Face Database...")
+        try:
+            db = FaceDatabase(
+                mongo_uri="mongodb://localhost:27017/",
+                database_name="privacy_guard_test",
+                encryption_key_path=str(key_path),
+                encryption_enabled=True
+            )
+            
+            # Create test person
+            embedding = [0.1] * 512
+            person = PersonEntry(
+                label="John Doe",
+                relationship="friend",
+                embeddings=[FaceEmbedding(embedding=embedding)],
+                consent_history=ConsentHistory(
+                    times_appeared=5,
+                    times_approved=4,
+                    times_protected=1
+                )
+            )
+            
+            # Test add
+            success = db.add_person(person)
+            assert success
+            
+            # Test get
+            retrieved = db.get_person(person.person_id)
+            assert retrieved is not None
+            assert retrieved.label == "John Doe"
+            assert len(retrieved.embeddings) == 1
+            assert len(retrieved.embeddings[0].embedding) == 512
+            
+            # Test search
+            results = db.search_persons("John")
+            assert len(results) > 0
+            
+            # Test statistics
+            stats = db.get_statistics()
+            assert stats['total_persons'] >= 1
+            
+            print(f"Person ID: {person.person_id}")
+            print(f"Label: {retrieved.label}")
+            print(f"Approval rate: {retrieved.consent_history.approval_rate:.1%}")
+            print("MongoDB Face Database working\n")
+            
+            # Cleanup test database
+            db.client.drop_database("privacy_guard_test")
+            db.close()
+            
+        except ConnectionFailure as e:
+            print(f"MongoDB connection failed: {e}")
+            print("Make sure MongoDB is running: mongod")
+            return False
+        except Exception as e:
+            print(f"Face Database failed: {e}\n")
+            return False
+        
+        # Test 3: Privacy Profile Storage
+        print("Test 3: Privacy Profile Storage...")
+        try:
+            profile_path = test_dir / "profile.json"
+            storage = PrivacyProfileDatabase(str(profile_path))
+            profile = PrivacyProfile()
+            success = storage.save(profile)
+            assert success
+            
+            loaded = storage.load()
+            assert loaded is not None
+            assert loaded.user_id == profile.user_id
+            
+            print(f"User ID: {loaded.user_id}")
+            print("Privacy Profile Storage working\n")
+        except Exception as e:
+            print(f"Privacy Profile Storage failed: {e}\n")
+            return False
+        
+        # Test 4: Provenance Storage
+        print("Test 4: Provenance Storage...")
+        try:
+            logs_path = test_dir / "logs"
+            prov_storage = ProvenanceDatabase(str(logs_path))
+            log = ProvenanceLog(
+                user_id="user123",
+                original_hash="abc123",
+                protected_hash="def456",
+                ethical_mode=EthicalMode.BALANCED,
+                edits_applied=[],
+                authenticity_score=1.0,
+                deception_risk="NONE"
+            )
+            
+            success = prov_storage.save(log)
+            assert success
+            
+            loaded_log = prov_storage.load(log.image_id)
+            assert loaded_log is not None
+            
+            print(f"Image ID: {loaded_log.image_id}")
+            print("Provenance Storage working\n")
+        except Exception as e:
+            print(f"Provenance Storage failed: {e}\n")
+            return False
+        
+        print("="*60)
+        print("All tests passed! Storage layer working correctly.")
+        print("="*60)
+        return True
+        
+    finally:
+        # Cleanup
+        shutil.rmtree(test_dir)
+        print(f"\nCleaned up test directory")
+
+if __name__ == "__main__":
+    print("\nPrivacy Guard - Storage Layer Test (MongoDB)\n")
+    
+    success = test_storage()
+    
+    if success:
+        print("\nModule 4 ready for use!")
+        print("\nAvailable classes:")
+        print("  • EncryptionManager - Handles encryption/decryption")
+        print("  • FaceDatabase - MongoDB storage for faces & consent")
+        print("  • PrivacyProfileStorage - Saves/loads privacy profiles")
+        print("  • ProvenanceStorage - Manages provenance logs")
+        sys.exit(0)
+    else:
+        print("\nTests failed!")
+        sys.exit(1)
+
+
     
 
 

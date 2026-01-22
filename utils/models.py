@@ -65,8 +65,8 @@ class ConsentStatus(str, Enum):
 class PrivacyProfile(BaseModel):
     """User's privacy preferences and sensitivity settings"""
     user_id: str = Field(default_factory = lambda: str(uuid.uuid4()))  
-    created_at: datetime = Field(default_factory = datetime.now())
-    updated_at: datetime = Field(default_factory = datetime.now())
+    created_at: datetime = Field(default_factory = datetime.now)
+    updated_at: datetime = Field(default_factory = datetime.now)
 
     # Identity Sensitivity
     identity_sensitivity: Dict[str, str] = Field(
