@@ -445,7 +445,77 @@ class FaceDatabase:
             self.client.close()
             print("MongoDB connection closed")
 
+# Privacy Profile Database
+class PrivacyProfileDatabase:
+    """Handles storage and loading of privacy profiles"""
+    def __init__(self, profile_path: str):
+        """
+        Initialize profile storage
 
+        Args:
+            profile_path: Path to JSON file
+        """
+        self.profile_path = Path(profile_path)
+        self.profile_path.parent.mkdir(parents = True, exist_ok = True)
+    
+    def save(self, profile: PrivacyProfile) -> bool:
+        """
+        Save privacy profile to JSON
+
+        Args:
+            profile: PrivacyProfile object
+
+        Returns:
+            True if successful
+        """
+        try:
+            # Update timestamp
+            profile.updated_at = datetime.now()
+            # Convert to dict
+            data = profile.model_dump()
+            # Save to JSON
+            with open(self.profile_path, "w") as f:
+                json.dump(data, f, indent = 2, default = str)
+            print(f"Privacy profile saved to {self.profile_path}")            
+            return True
+        
+        except Exception as e:
+            print(f"Failed to save profile: {e}")
+            return False
+    
+    def load(self):
+        """
+        Load privacy profile from JSON
+
+        Returns:
+            PrivacyProfile object or None
+        """
+        try:
+            if not self.profile_path.exists():
+                print("No existing profile found")
+                return None
+            
+            with open(self.profile_path, "r") as f:
+                data = json.load(f)
+            
+            # Convert datetime strings
+            if "created_at" in data and isinstance(data["created_at"], str):
+                data["created_at"] = datetime.fromisoformat(data["created_at"])
+            if "updated_at" in data and isinstance(data["updated_at"], str):
+                data["updated_at"] = datetime.fromisoformat(data["updated_at"])
+            
+            profile = PrivacyProfile(**data)
+            print(f"Privacy profile loaded from {self.profile_path}")
+            return profile
+        
+        except Exception as e:
+            print(f"Failed to load profile: {e}")
+            return None
+    
+    
+        
+        
+    
 
             
 
