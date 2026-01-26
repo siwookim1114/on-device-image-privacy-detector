@@ -1,9 +1,13 @@
-# Detection tools
+# Import required utils
 import torch
 from PIL import Image
 from typing import List, Dict, Any, Optional
 import json
+import numpy as np
+
+# Detector Libraries
 from facenet_pytorch import MTCNN
+import easyocr
 from langchain.tools import BaseTool
 
 class FaceDetectionTool(BaseTool):
@@ -69,4 +73,69 @@ class FaceDetectionTool(BaseTool):
         
         except Exception as e:
             return json.dumps({"error": str(e), "faces": [], "count": 0})
+
+class TextDetectionTool(BaseTool):
+    """Tool for detecting and recognizing text in images"""
+    name: str = "detect_text"
+    description: str = (
+        "Detects and recognizes text in the image using OCR. "
+        "Returns detected text content and locations. "
+        "Use this tool when you see text, numbers, signs, or documents in the image."
+    )
+    detector: Any = None
+    config: Any = None
+
+    def __init__(self, config, **kwargs):
+        super().__init__(**kwargs)
+        self.config = config
+        self._init_detector()
+    
+    def _init_detector(self):
+        """Initialize text detector"""
+        try:
+            self.detector = easyocr.Reader(
+                ["en"],
+                gpu = self.config.system.device == "cuda",
+                verbose = False
+            )
+            print("Text detection tool ready")
+
+        except Exception as e:
+            print(f"Text detector failed: {e}")
+            self.detector = None
+    
+    def _run(self, image_path: str) -> str:
+        """Run text detection"""
+        if self.detector is None:
+            return "Text detector not available"
         
+        try:
+            image = Image.open(image_path)
+            img_array = np.array(image)
+            results = self.detector.readtext(img_array)
+            texts = []
+            for detection in results:
+                bbox_points, text, confidence = detection
+
+                if confidence < 0.5:
+                    continue
+
+                x_coords = [p[0] for p in bbox_points]
+                y_coords = [p[1] for p in bbox_points]
+
+                texts.append({
+                    "text": text,
+                    "bbox": [
+                        int(min(x_coords)),
+                        int(min(y_coords)),
+                        int(max(x_coords) - min(x_coords)),
+                        int(max(y_coords) - min(y_coords))
+                    ],
+                    "confidence": float(confidence)
+                })
+            return json.dumps({"texts": texts, "count": len(texts)})
+    
+        except Exception as e:
+            return json.dumps({"error": str(e), "texts": [], "count": 0})
+    
+    
