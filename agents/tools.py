@@ -1,13 +1,15 @@
 # Import required utils
 import torch
 from PIL import Image
-from typing import List, Dict, Any, Optional
+from typing import Any
 import json
 import numpy as np
 
 # Detector Libraries
 from facenet_pytorch import MTCNN
 import easyocr
+from ultralytics import YOLO
+
 from langchain.tools import BaseTool
 
 class FaceDetectionTool(BaseTool):
@@ -19,7 +21,7 @@ class FaceDetectionTool(BaseTool):
         "Use this tool when you see people or human faces in the image."
     )
     detector: Any = None
-    device: torch.device = torch.device("cpu")
+    device: torch.device = torch.device("gpu" if torch.cuda.is_available() else "cpu")
     config: Any = None
 
     def __init__(self, config, **kwargs):
@@ -138,4 +140,71 @@ class TextDetectionTool(BaseTool):
         except Exception as e:
             return json.dumps({"error": str(e), "texts": [], "count": 0})
     
+class ObjectDetectionTool(BaseTool):
+    """Tool for detecting objects in images"""
+    name: str = "detect_objects"
+    description: str = (
+        "Detects objects in the image like cars, laptops, phones, screens, etc . "
+        "Returns list of detected objects with locations. "
+        "Use this tool when you see vehicles, electronic devices, or any other items or objects."
+    )
+
+    detector: Any = None
+    device: torch.device = torch.device("gpu" if torch.cuda.is_available() else "cpu")
+    config: Any = None
+
+    def __init__(self, config, **kwargs):
+        super().__init__(**kwargs)
+        self.config = config
+        self.device = torch.device(config.system.device)
+        self._init_detector()
     
+    def _init_detector(self):
+        """Initialize object detector"""
+        try:
+            self.detector = YOLO("yolov8n.pt")
+            self.detector.to(self.device)
+            print("Object detection tool ready")
+        except Exception as e:
+            print(f"Object detector failed: {e}")
+            self.detector = None
+    
+    def _run(self, image_path: str) -> str:
+        """Run object detection"""
+        if self.detector is None:
+            return "Object detector not available"
+        
+        try:
+            results = self.detector.predict(
+                image_path,
+                conf = 0.5,
+                verbose = False
+            )
+            objects = []
+            for result in results:
+                boxes = result.boxes
+
+                for box in boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                    class_id = int(box.cls[0])
+                    class_name = result.names[class_id]
+
+                    # Filter privacy-relevant objects
+                    privacy_objects = {
+                        "laptop", "tv", "cell phone", "monitor", "car",
+                        "truck", "bus", "keyboard", "book"
+                    }
+                    if class_name.lower() in privacy_objects:
+                        objects.append({
+                            "class": class_name,
+                            "bbox": [x1, y1, x2 - x1, y2 - y1],
+                            "confidence": float(box.conf[0])
+                        })
+            
+            return json.dumps({"objects": objects, "count": len(objects)})
+
+        except Exception as e:
+            return json.dumps({"error": str(e), "objects": [], "count": 0})
+    
+
+        
