@@ -15,6 +15,9 @@ transformers>=4.35.0
 accelerate>=0.24.0
 bitsandbytes>=0.41.0
 
+# Agents
+langchain 
+
 # Face detection
 facenet-pytorch>=2.5.3
 
