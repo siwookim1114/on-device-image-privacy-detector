@@ -155,6 +155,7 @@ class TextDetection(Detection):
 
 class ObjectDetection(Detection):
     """Object detection result"""
+    category: str = "object"
     object_class: str
     contains_text: bool = False
     contains_screen: bool = False

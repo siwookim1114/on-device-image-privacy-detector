@@ -2,7 +2,7 @@
 
 # System Configuration
 system:
-  device: "cuda"  # cuda, cpu, or mps
+  device: "mps"  # cuda, cpu, or mps (use mps for Apple Silicon)
   device_fallback: "cpu"
   on_device_only: true
   enable_cloud_llm: false

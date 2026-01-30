@@ -21,7 +21,7 @@ class FaceDetectionTool(BaseTool):
         "Use this tool when you see people or human faces in the image."
     )
     detector: Any = None
-    device: torch.device = torch.device("gpu" if torch.cuda.is_available() else "cpu")
+    device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     config: Any = None
 
     def __init__(self, config, **kwargs):
@@ -29,21 +29,23 @@ class FaceDetectionTool(BaseTool):
         self.config = config
         self.device = torch.device(config.system.device)
         self._init_detector()
-    
+
     def _init_detector(self):
         """Initialize face detector"""
         try:
+            # Use CPU for MTCNN - MPS has compatibility issues with adaptive pooling
+            detector_device = torch.device("cpu") if self.device.type == "mps" else self.device
             self.detector = MTCNN(
                 image_size = 160,    # Output face size
                 margin = 0,          # Extra pixels around face
                 min_face_size = 20,  # Ignore tiny faces
                 thresholds = [0.6, 0.7, 0.7], # Detection confidence thresholds
                 factor = 0.709,               # Image pyramid scale factor
-                device = self.device,         # CPU or GPU
+                device = detector_device,     # CPU for MPS, otherwise use config device
                 keep_all = True               # Return ALL faces, not just the best one
             )
-            print("Face detection tool ready")
-        
+            print(f"Face detection tool ready (device: {detector_device})")
+
         except Exception as e:
             print(f"Face detector failed: {e}")
             self.detector = None
@@ -52,14 +54,32 @@ class FaceDetectionTool(BaseTool):
         """Run face detection"""
         if self.detector is None:
             return "Face detector not available"
-        
+
         try:
             image = Image.open(image_path).convert("RGB")
-            boxes, probs, landmarks = self.detector.detect(image, landmarks = True)
+
+            try:
+                boxes, probs, landmarks = self.detector.detect(image, landmarks=True)
+            except RuntimeError as e:
+                # MPS fallback: if MPS fails, retry on CPU
+                if "MPS" in str(e) or "divisible" in str(e):
+                    print("MPS error detected, falling back to CPU for face detection...")
+                    cpu_detector = MTCNN(
+                        image_size=160,
+                        margin=0,
+                        min_face_size=20,
+                        thresholds=[0.6, 0.7, 0.7],
+                        factor=0.709,
+                        device=torch.device("cpu"),
+                        keep_all=True
+                    )
+                    boxes, probs, landmarks = cpu_detector.detect(image, landmarks=True)
+                else:
+                    raise e
 
             if boxes is None:
                 return json.dumps({"faces": [], "count": 0})
-            
+
             faces = []
             for i, (box, prob, landmark) in enumerate(zip(boxes, probs, landmarks)):
                 if prob < 0.7:
@@ -72,7 +92,7 @@ class FaceDetectionTool(BaseTool):
                     "has_landmarks": landmark is not None
                 })
             return json.dumps({"faces": faces, "count": len(faces)})
-        
+
         except Exception as e:
             return json.dumps({"error": str(e), "faces": [], "count": 0})
 
@@ -150,7 +170,7 @@ class ObjectDetectionTool(BaseTool):
     )
 
     detector: Any = None
-    device: torch.device = torch.device("gpu" if torch.cuda.is_available() else "cpu")
+    device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     config: Any = None
 
     def __init__(self, config, **kwargs):
@@ -158,7 +178,7 @@ class ObjectDetectionTool(BaseTool):
         self.config = config
         self.device = torch.device(config.system.device)
         self._init_detector()
-    
+
     def _init_detector(self):
         """Initialize object detector"""
         try:
