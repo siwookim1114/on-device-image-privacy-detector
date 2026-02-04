@@ -1,0 +1,54 @@
+{
+  "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample4.jpeg",
+  "processing_time_ms": 3215.433120727539,
+  "total_detections": 4,
+  "faces": [
+    {
+      "bbox": [
+        456,
+        443,
+        243,
+        378
+      ],
+      "confidence": 0.9997771382331848,
+      "size": "large",
+      "clarity": "high"
+    }
+  ],
+  "text_regions": [],
+  "objects": [
+    {
+      "bbox": [
+        0,
+        523,
+        197,
+        306
+      ],
+      "confidence": 0.8850245475769043,
+      "object_class": "unknown",
+      "contains_screen": false
+    },
+    {
+      "bbox": [
+        0,
+        922,
+        348,
+        369
+      ],
+      "confidence": 0.8246819376945496,
+      "object_class": "unknown",
+      "contains_screen": false
+    },
+    {
+      "bbox": [
+        191,
+        491,
+        212,
+        128
+      ],
+      "confidence": 0.6776183843612671,
+      "object_class": "unknown",
+      "contains_screen": false
+    }
+  ]
+}

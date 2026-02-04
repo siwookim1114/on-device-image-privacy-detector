@@ -1,0 +1,737 @@
+{
+  "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample3.png",
+  "processing_time_ms": 4090.440034866333,
+  "total_detections": 66,
+  "faces": [
+    {
+      "bbox": [
+        225,
+        68,
+        92,
+        127
+      ],
+      "confidence": 0.9999864101409912,
+      "size": "small",
+      "clarity": "high"
+    },
+    {
+      "bbox": [
+        738,
+        76,
+        93,
+        123
+      ],
+      "confidence": 0.9999823570251465,
+      "size": "small",
+      "clarity": "high"
+    },
+    {
+      "bbox": [
+        275,
+        616,
+        88,
+        108
+      ],
+      "confidence": 0.999984860420227,
+      "size": "small",
+      "clarity": "high"
+    },
+    {
+      "bbox": [
+        754,
+        604,
+        85,
+        108
+      ],
+      "confidence": 0.999984860420227,
+      "size": "small",
+      "clarity": "high"
+    },
+    {
+      "bbox": [
+        768,
+        1100,
+        87,
+        97
+      ],
+      "confidence": 0.9999886751174927,
+      "size": "small",
+      "clarity": "high"
+    },
+    {
+      "bbox": [
+        231,
+        1108,
+        80,
+        102
+      ],
+      "confidence": 0.9999299049377441,
+      "size": "small",
+      "clarity": "high"
+    },
+    {
+      "bbox": [
+        702,
+        1111,
+        74,
+        97
+      ],
+      "confidence": 0.9999992847442627,
+      "size": "small",
+      "clarity": "high"
+    }
+  ],
+  "text_regions": [
+    {
+      "bbox": [
+        590,
+        438,
+        190,
+        28
+      ],
+      "confidence": 0.9083582098747173,
+      "text_content": "Social Security #:",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        75,
+        449,
+        47,
+        25
+      ],
+      "confidence": 0.9943571376173319,
+      "text_content": "233",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        375,
+        453,
+        72,
+        18
+      ],
+      "confidence": 0.9986795993127735,
+      "text_content": "Password:",
+      "text_type": "password"
+    },
+    {
+      "bbox": [
+        355,
+        467,
+        117,
+        30
+      ],
+      "confidence": 0.6353277347406904,
+      "text_content": "Liia123#s!",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        584,
+        462,
+        50,
+        26
+      ],
+      "confidence": 0.9999969716779362,
+      "text_content": "232",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        646,
+        464,
+        114,
+        24
+      ],
+      "confidence": 0.9508581494571838,
+      "text_content": "45-6193",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        547,
+        495,
+        143,
+        25
+      ],
+      "confidence": 0.9998570033143654,
+      "text_content": "Bank Account:",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        696,
+        497,
+        116,
+        26
+      ],
+      "confidence": 0.9199969533942023,
+      "text_content": "9043 5698",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        861,
+        488,
+        131,
+        39
+      ],
+      "confidence": 0.6673790503052311,
+      "text_content": "KingRidero5!",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        683,
+        523,
+        68,
+        20
+      ],
+      "confidence": 0.9998049139976501,
+      "text_content": "5317",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        399,
+        943,
+        84,
+        16
+      ],
+      "confidence": 0.999886191626761,
+      "text_content": "Password:",
+      "text_type": "password"
+    },
+    {
+      "bbox": [
+        245,
+        963,
+        40,
+        18
+      ],
+      "confidence": 0.47453455170540626,
+      "text_content": "@lc",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        395,
+        957,
+        93,
+        26
+      ],
+      "confidence": 0.6049116145155705,
+      "text_content": "HaurerWvifi",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        590,
+        952,
+        121,
+        29
+      ],
+      "confidence": 0.9044582482999449,
+      "text_content": "Credit Card:",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        734,
+        959,
+        132,
+        25
+      ],
+      "confidence": 0.6212275231250631,
+      "text_content": "459270-4625",
+      "text_type": "phone_number"
+    },
+    {
+      "bbox": [
+        896,
+        951,
+        101,
+        29
+      ],
+      "confidence": 0.9997522280115102,
+      "text_content": "Password:",
+      "text_type": "password"
+    },
+    {
+      "bbox": [
+        199,
+        983,
+        58,
+        20
+      ],
+      "confidence": 0.9999980926513672,
+      "text_content": "6783",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        317,
+        975,
+        46,
+        18
+      ],
+      "confidence": 0.993712442525175,
+      "text_content": "0782",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        385,
+        975,
+        91,
+        26
+      ],
+      "confidence": 0.9997331166222756,
+      "text_content": "6978243",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        631,
+        981,
+        79,
+        26
+      ],
+      "confidence": 0.8433515186219149,
+      "text_content": "Account",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        722,
+        986,
+        144,
+        24
+      ],
+      "confidence": 0.7076451707993101,
+      "text_content": "5e67 2510 9221",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        880,
+        972,
+        121,
+        36
+      ],
+      "confidence": 0.8735143789609218,
+      "text_content": "Mangol1195",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        271,
+        993,
+        65,
+        26
+      ],
+      "confidence": 0.9338107200864499,
+      "text_content": "5746",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        718,
+        1007,
+        120,
+        26
+      ],
+      "confidence": 0.4905271556718929,
+      "text_content": "Pin:2386",
+      "text_type": "password"
+    },
+    {
+      "bbox": [
+        595,
+        1429,
+        52,
+        16
+      ],
+      "confidence": 0.6453155179018473,
+      "text_content": "Credit",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        653,
+        1425,
+        188,
+        20
+      ],
+      "confidence": 0.8230175025071478,
+      "text_content": "Card: 4532 1604 8762",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        870,
+        1411,
+        98,
+        30
+      ],
+      "confidence": 0.9999258107094399,
+      "text_content": "Password:",
+      "text_type": "password"
+    },
+    {
+      "bbox": [
+        569,
+        1457,
+        38,
+        18
+      ],
+      "confidence": 0.9997217059135437,
+      "text_content": "Bank",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        614,
+        1450,
+        122,
+        24
+      ],
+      "confidence": 0.9996112210693059,
+      "text_content": "Account: 8462",
+      "text_type": "bank_account"
+    },
+    {
+      "bbox": [
+        743,
+        1449,
+        82,
+        20
+      ],
+      "confidence": 0.7385164665183771,
+      "text_content": "378 5421",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        864,
+        1440,
+        122,
+        28
+      ],
+      "confidence": 0.8006414913313161,
+      "text_content": "Flower 7%!",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        683,
+        1475,
+        36,
+        20
+      ],
+      "confidence": 0.6789380311965942,
+      "text_content": "PIN_",
+      "text_type": "password"
+    },
+    {
+      "bbox": [
+        729,
+        1475,
+        48,
+        18
+      ],
+      "confidence": 0.966024635471552,
+      "text_content": "3902",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        125,
+        449,
+        98,
+        37
+      ],
+      "confidence": 0.8248848882986083,
+      "text_content": "45-6789",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        872,
+        470,
+        94,
+        31
+      ],
+      "confidence": 0.9997755957908524,
+      "text_content": "Password:",
+      "text_type": "password"
+    },
+    {
+      "bbox": [
+        286,
+        959,
+        46,
+        21
+      ],
+      "confidence": 0.9937007051386029,
+      "text_content": "card:",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        260,
+        975,
+        53,
+        24
+      ],
+      "confidence": 0.9999979352348233,
+      "text_content": "345",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        570,
+        974,
+        58,
+        28
+      ],
+      "confidence": 0.9999362230300903,
+      "text_content": "Bank",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        379,
+        1381,
+        46,
+        20
+      ],
+      "confidence": 0.9986192979031294,
+      "text_content": "Social",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        424,
+        1386,
+        64,
+        26
+      ],
+      "confidence": 0.9973517668398862,
+      "text_content": "Security",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        372,
+        1394,
+        72,
+        28
+      ],
+      "confidence": 0.7019113344118699,
+      "text_content": "349-08-",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        444,
+        1404,
+        54,
+        26
+      ],
+      "confidence": 0.999967634677887,
+      "text_content": "2137",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        354,
+        1426,
+        42,
+        24
+      ],
+      "confidence": 0.9994179010391235,
+      "text_content": "Bank",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        396,
+        1434,
+        60,
+        25
+      ],
+      "confidence": 0.998026383289118,
+      "text_content": "Account:",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        460,
+        1442,
+        48,
+        24
+      ],
+      "confidence": 0.9994876027265602,
+      "text_content": "5452",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        338,
+        1441,
+        52,
+        28
+      ],
+      "confidence": 0.8922491669654846,
+      "text_content": "5477",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        392,
+        1450,
+        54,
+        29
+      ],
+      "confidence": 0.999640703201294,
+      "text_content": "5213",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        378,
+        1472,
+        38,
+        22
+      ],
+      "confidence": 0.6606774173745565,
+      "text_content": "PIn :",
+      "text_type": "password"
+    },
+    {
+      "bbox": [
+        418,
+        1478,
+        55,
+        26
+      ],
+      "confidence": 0.8324966916124245,
+      "text_content": "3902",
+      "text_type": "general_text"
+    }
+  ],
+  "objects": [
+    {
+      "bbox": [
+        0,
+        789,
+        317,
+        161
+      ],
+      "confidence": 0.9089317917823792,
+      "object_class": "laptop",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        511,
+        1255,
+        297,
+        155
+      ],
+      "confidence": 0.9024639129638672,
+      "object_class": "laptop",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        0,
+        1270,
+        327,
+        210
+      ],
+      "confidence": 0.8978767991065979,
+      "object_class": "laptop",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        520,
+        792,
+        360,
+        163
+      ],
+      "confidence": 0.8800363540649414,
+      "object_class": "laptop",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        511,
+        262,
+        318,
+        170
+      ],
+      "confidence": 0.860117495059967,
+      "object_class": "laptop",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        150,
+        264,
+        357,
+        182
+      ],
+      "confidence": 0.750394880771637,
+      "object_class": "laptop",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        8,
+        953,
+        140,
+        65
+      ],
+      "confidence": 0.5631318688392639,
+      "object_class": "cell phone",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        8,
+        952,
+        141,
+        67
+      ],
+      "confidence": 0.34550586342811584,
+      "object_class": "laptop",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        843,
+        404,
+        77,
+        28
+      ],
+      "confidence": 0.33171331882476807,
+      "object_class": "cell phone",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        226,
+        1367,
+        282,
+        168
+      ],
+      "confidence": 0.27242207527160645,
+      "object_class": "book",
+      "contains_screen": false
+    }
+  ]
+}

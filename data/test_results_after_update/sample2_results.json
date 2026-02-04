@@ -1,0 +1,20 @@
+{
+  "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample2.png",
+  "processing_time_ms": 1096.8620777130127,
+  "total_detections": 1,
+  "faces": [
+    {
+      "bbox": [
+        349,
+        98,
+        110,
+        137
+      ],
+      "confidence": 0.9999982118606567,
+      "size": "medium",
+      "clarity": "high"
+    }
+  ],
+  "text_regions": [],
+  "objects": []
+}

@@ -1,0 +1,32 @@
+{
+  "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample2.png",
+  "processing_time_ms": 918.6358451843262,
+  "total_detections": 2,
+  "faces": [
+    {
+      "bbox": [
+        349,
+        98,
+        110,
+        136
+      ],
+      "confidence": 0.9999992847442627,
+      "size": "medium",
+      "clarity": "high"
+    }
+  ],
+  "text_regions": [],
+  "objects": [
+    {
+      "bbox": [
+        81,
+        314,
+        427,
+        172
+      ],
+      "confidence": 0.8193268179893494,
+      "object_class": "laptop",
+      "contains_screen": true
+    }
+  ]
+}

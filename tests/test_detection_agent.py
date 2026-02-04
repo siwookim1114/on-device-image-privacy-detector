@@ -208,7 +208,7 @@ def test_detection_agent_on_dataset(dataset_path: str, visualize: bool = True, s
     print(f"✓ Found {len(image_files)} test images\n")
 
     # Create output directory
-    output_dir = project_root / "data" / "test_results"
+    output_dir = project_root / "data" / "test_results_after_update_2"
     output_dir.mkdir(exist_ok=True)
 
     # Process each image

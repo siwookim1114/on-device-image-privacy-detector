@@ -1,0 +1,87 @@
+{
+  "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample4.jpeg",
+  "processing_time_ms": 2095.9837436676025,
+  "total_detections": 7,
+  "faces": [
+    {
+      "bbox": [
+        453,
+        442,
+        246,
+        381
+      ],
+      "confidence": 0.9998262524604797,
+      "size": "medium",
+      "clarity": "high"
+    }
+  ],
+  "text_regions": [],
+  "objects": [
+    {
+      "bbox": [
+        0,
+        523,
+        197,
+        306
+      ],
+      "confidence": 0.8850245475769043,
+      "object_class": "tv",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        83,
+        995,
+        115,
+        73
+      ],
+      "confidence": 0.8494143486022949,
+      "object_class": "mouse",
+      "contains_screen": false
+    },
+    {
+      "bbox": [
+        0,
+        922,
+        348,
+        369
+      ],
+      "confidence": 0.8246819376945496,
+      "object_class": "laptop",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        191,
+        491,
+        212,
+        128
+      ],
+      "confidence": 0.6776183843612671,
+      "object_class": "tv",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        202,
+        995,
+        115,
+        63
+      ],
+      "confidence": 0.5958625674247742,
+      "object_class": "mouse",
+      "contains_screen": false
+    },
+    {
+      "bbox": [
+        30,
+        1097,
+        202,
+        193
+      ],
+      "confidence": 0.4087795615196228,
+      "object_class": "keyboard",
+      "contains_screen": false
+    }
+  ]
+}

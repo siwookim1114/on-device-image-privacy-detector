@@ -1,17 +1,10 @@
 import torch
-import cv2
-import numpy as np
 from PIL import Image
-from typing import List, Dict, Any, Optional
+from typing import List, Tuple
 from pathlib import Path
 import time
 import json
-import re
-import base64
-from io import BytesIO
 
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain_core.prompts import PromptTemplate
 from utils.models import (
     DetectionResults,
     FaceDetection,
@@ -20,157 +13,41 @@ from utils.models import (
     BoundingBox
 )
 from agents.tools import FaceDetectionTool, TextDetectionTool, ObjectDetectionTool
-from agents.local_wrapper import VisionLLM
 
 
 class DetectionAgent:
     """
-    Agent 1: Detection Agent
-    Uses local VLM to reason about images and selectively call detection tools
-    Only runs necessary detectors based on image content analysis
+    Agent 1: Detection Agent (Vision Specialist)
+
+    Purpose: Detect ALL visual elements in images
+
+    Architecture (Phase 1):
+    - ALWAYS runs all detection tools (more reliable)
+
+    Tools:
+    - detect_faces: MTCNN for face detection + FaceNet for face embedding extraction
+    - detect_text: EasyOCR for text recognition
+    - detect_objects: YOLO for object detection
     """
     def __init__(self, config):
         """
-        Initialize detection agent
+        Initialize detection agent with all detection tools
 
         Args:
             config: Configuration object
         """
         self.config = config
         self.device = torch.device(config.system.device)
-
         print(f"Initializing Detection Agent on {self.device}")
 
-        # Initialize VLM using ChatOllama
-        self.vlm = VisionLLM(
-            model="llava-phi3",
-            base_url="http://localhost:11434"
-        )
-
         # Initialize detection tools
-        self.tools = self._init_tools()
+        self.face_tool = FaceDetectionTool(config)   # MTCNN
+        self.text_tool = TextDetectionTool(config)   # EasyOCR
+        self.object_tool = ObjectDetectionTool(config) # YOLO
 
-        # Create agent
-        self.agent = self._create_agent()
-
-    def _init_tools(self):
+    def run(self, image_path: str) -> DetectionResults:
         """
-        Initialize all detection tools
-        Face Detection, Text Detection, Object Detection
-        """
-        tools = [
-            FaceDetectionTool(self.config),
-            TextDetectionTool(self.config),
-            ObjectDetectionTool(self.config)
-        ]
-        return tools
-
-    def _analyze_image(self, image: Image.Image) -> str:
-        """
-        Stage 1: Force detailed image description before tool selection
-        Returns a structured description of what's in the image
-        """
-        analysis_prompt = """Analyze this image carefully and describe what you see in detail.
-
-You MUST answer these specific questions:
-
-1. PEOPLE: Are there any people, faces, or human figures visible?
-   - How many? Where are they positioned?
-
-2. TEXT: Is there ANY text, numbers, documents, signs, labels, sticky notes,
-   papers, screens with text, handwriting, or printed text visible?
-   - What kind of text? Where is it located?
-
-3. OBJECTS: Are there any of these objects visible?
-   - Electronics: laptops, phones, tablets, monitors, TVs, keyboards
-   - Vehicles: cars, trucks, buses
-   - Documents: books, papers, cards
-   - Where are they located?
-
-Be thorough - it's better to mention something uncertain than to miss it.
-Format your response as:
-PEOPLE: [description or "None visible"]
-TEXT: [description or "None visible"]
-OBJECTS: [description or "None visible"]"""
-
-        try:
-            response = self.vlm.invoke(analysis_prompt)
-            print(f"\n{'='*60}")
-            print("Stage 1 - Image Analysis:")
-            print(f"{'='*60}")
-            print(response)
-            print(f"{'='*60}\n")
-            return response
-        except Exception as e:
-            print(f"Image analysis failed: {e}")
-            return "Analysis failed - call all tools to be safe"
-
-    def _create_agent(self):
-        """Create the React Agent"""
-        template = """
-        You are an intelligent image analysis agent for privacy protection.
-
-        Your task: Based on the pre-analysis, decide which detection tools to use.
-
-        Available tools:
-        {tools}
-
-        Tool names: {tool_names}
-
-        PRE-ANALYSIS OF IMAGE:
-        {image_analysis}
-
-        DECISION RULES (based on pre-analysis above):
-        - If PEOPLE section mentions any people, faces, or humans -> MUST call detect_faces
-        - If TEXT section mentions any text, numbers, documents, papers, signs, sticky notes, or writing -> MUST call detect_text
-        - If OBJECTS section mentions laptops, phones, monitors, vehicles, electronics, or books -> MUST call detect_objects
-        - When UNCERTAIN about any category -> call the tool (better safe than sorry)
-        - Only skip a tool if the pre-analysis clearly states "None visible" for that category
-
-        RESPONSE FORMAT:
-        Thought: [Based on pre-analysis, which tools are needed]
-        Action: [Tool name]
-        Action Input: [Image path]
-        Observation: [Tool result]
-        ... (repeat for each needed tool)
-        Thought: I have completed all necessary detections
-        Final Answer: [Summary of all detections]
-
-        Current task:
-        Question: {input}
-
-        {agent_scratchpad}
-        """
-        prompt = PromptTemplate(
-            template = template,
-            input_variables = ["input", "agent_scratchpad", "image_analysis"],
-            partial_variables = {
-                "tools": "\n".join([f"{tool.name}: {tool.description}" for tool in self.tools]),
-                "tool_names": ", ".join([tool.name for tool in self.tools])
-            }
-        )
-
-        # Create React Agent
-        agent = create_react_agent(
-            llm = self.vlm.llm,  # Use the underlying ChatOllama
-            tools = self.tools,
-            prompt = prompt
-        )
-
-        # Create executor
-        agent_executor = AgentExecutor(
-            agent = agent,
-            tools = self.tools,
-            verbose = True,
-            max_iterations = 10,
-            handle_parsing_errors = True,
-            return_intermediate_steps = True
-        )
-        return agent_executor
-
-    def run(self, image_path: str):
-        """
-        Main detection method with tool selection
+        Main detection pipeline = runs ALL detection tools
 
         Args:
             image_path: Path to input image
@@ -194,30 +71,31 @@ OBJECTS: [description or "None visible"]"""
                 image = image.resize(new_size, Image.LANCZOS)
                 print(f"Resized to {new_size}\n")
 
-            # Set image in VLM
-            self.vlm.set_image(image)
+            # Initialize results container
+            detections = DetectionResults(image_path = image_path)
 
-            # Stage 1: Get detailed image analysis
-            image_analysis = self._analyze_image(image)
+            # Stage 1: Run ALL detection tools
+            print("\nRunning Detection Tools:")
+            print("-" * 40)
 
-            # Stage 2: Run agent with pre-analysis to guide tool selection
-            result = self.agent.invoke({
-                "input": f"Detect privacy-relevant elements in the image at {image_path}. "
-                         f"Use the pre-analysis to decide which tools to call.",
-                "image_analysis": image_analysis
-            })
+            # Run all detections
+            self._run_face_detection(image_path, detections)
+            self._run_text_detection(image_path, detections)
+            self._run_object_detection(image_path, detections)
 
-            # Parse agent output
-            detections = self._parse_agent_output(result, image_path)
+            # Processing time
             processing_time = (time.time() - start_time) * 1000
             detections.processing_time_ms = processing_time
 
+            # Print Summary
             print(f"\n{'='*60}")
-            print(f"  Detection complete in {processing_time:.2f}ms")
-            print(f"  Total: {detections.total_detections} elements")
-            print(f"  Faces: {len(detections.faces)}")
-            print(f"  Text: {len(detections.text_regions)}")
-            print(f"  Objects: {len(detections.objects)}")
+            print(f"Detection Complete")
+            print(f"{'='*60}")
+            print(f"  Processing time: {processing_time:.2f}ms")
+            print(f"  Total detections: {detections.total_detections}")
+            print(f"    - Faces: {len(detections.faces)}")
+            print(f"    - Text regions: {len(detections.text_regions)}")
+            print(f"    - Objects: {len(detections.objects)}")
             print(f"{'='*60}\n")
 
             return detections
@@ -226,69 +104,146 @@ OBJECTS: [description or "None visible"]"""
             print(f"Detection failed: {e}")
             raise
 
-    def _parse_agent_output(self, result: Dict, image_path: str):
-        """Parse agent output from intermediate tool steps into DetectionResults"""
-        detections = DetectionResults(image_path = image_path)
+    def _run_face_detection(self, image_path: str, detections: DetectionResults):
+        """Run face detection tool and add results to detections"""
+        try:
+            result = self.face_tool._run(image_path)
+            data = json.loads(result)
 
-        # Parse structured data directly from intermediate tool steps
-        for action, observation in result.get("intermediate_steps", []):
-            try:
-                data = json.loads(observation)
-            except (json.JSONDecodeError, TypeError):
-                continue
+            if "error" in data:
+                print(f"  Face Detection: {data['error']}")
+                return
 
-            if action.tool == "detect_faces" and "faces" in data:
+            if "faces" in data:
                 for face_data in data["faces"]:
                     bbox_list = face_data.get("bbox", [0, 0, 0, 0])
                     bbox = BoundingBox(
-                        x = bbox_list[0],
-                        y = bbox_list[1],
-                        width = bbox_list[2],
-                        height = bbox_list[3]
+                        x=bbox_list[0],
+                        y=bbox_list[1],
+                        width=bbox_list[2],
+                        height=bbox_list[3]
                     )
                     face = FaceDetection(
-                        bbox = bbox,
-                        confidence = face_data.get("confidence", 0.0),
-                        size = self._classify_size(bbox.width, bbox.height),
-                        clarity = "high" if face_data.get("confidence", 0) > 0.9 else "medium"
+                        bbox=bbox,
+                        confidence=face_data.get("confidence", 0.0),
+                        size=face_data.get("size", self._classify_size(bbox.width, bbox.height)),
+                        clarity="high" if face_data.get("confidence", 0) > 0.95 else "medium",
+                        attributes = {
+                            "has_landmarks": face_data.get("has_landmarks", False),
+                            "has_embedding": face_data.get("has_embedding", False),
+                            "embedding": face_data.get("embedding")
+                        }
                     )
                     detections.faces.append(face)
+                print(f"  Face Detection: Found {len(data['faces'])} faces")
+        except Exception as e:
+            print(f"  Face Detection failed: {e}")
 
-            elif action.tool == "detect_text" and "texts" in data:
+    def _run_text_detection(self, image_path: str, detections: DetectionResults):
+        """Run text detection tool and add results to detections"""
+        try:
+            result = self.text_tool._run(image_path)
+            data = json.loads(result)
+
+            if "error" in data:
+                print(f"  Text Detection: {data['error']}")
+                return
+
+            if "texts" in data:
                 for text_data in data["texts"]:
                     bbox_list = text_data.get("bbox", [0, 0, 0, 0])
                     bbox = BoundingBox(
-                        x = bbox_list[0],
-                        y = bbox_list[1],
-                        width = bbox_list[2],
-                        height = bbox_list[3]
+                        x=bbox_list[0],
+                        y=bbox_list[1],
+                        width=bbox_list[2],
+                        height=bbox_list[3]
                     )
                     text = TextDetection(
-                        bbox = bbox,
-                        confidence = text_data.get("confidence", 0.0),
-                        text_content = text_data.get("text", ""),
-                        text_type = self._classify_text(text_data.get("text", ""))
+                        bbox=bbox,
+                        confidence=text_data.get("confidence", 0.0),
+                        text_content=text_data.get("text_content", ""),  # Matches tool output
+                        text_type=text_data.get("text_type", "general_text"),
+                        attributes = {
+                            "is_sensitive": text_data.get("is_sensitive", False),
+                            "is_pii": text_data.get("is_pii", False),
+                            "is_critical": text_data.get("is_critical", False)
+                        }
                     )
                     detections.text_regions.append(text)
+                pii_count = data.get("pii_count", 0)
+                critical_count = data.get("critical_count", 0)
+                print(f"  Text Detection: Found {len(data['texts'])} text regions ({pii_count} PII, {critical_count} critical)")
+        except Exception as e:
+            print(f"  Text Detection failed: {e}")
 
-            elif action.tool == "detect_objects" and "objects" in data:
+    def _run_object_detection(self, image_path: str, detections: DetectionResults):
+        """Run object detection tool and add results to detections"""
+        try:
+            result = self.object_tool._run(image_path)
+            data = json.loads(result)
+
+            if "error" in data:
+                print(f"  Object Detection: {data['error']}")
+                return
+
+            if "objects" in data:
                 for obj_data in data["objects"]:
                     bbox_list = obj_data.get("bbox", [0, 0, 0, 0])
                     bbox = BoundingBox(
-                        x = bbox_list[0],
-                        y = bbox_list[1],
-                        width = bbox_list[2],
-                        height = bbox_list[3]
+                        x=bbox_list[0],
+                        y=bbox_list[1],
+                        width=bbox_list[2],
+                        height=bbox_list[3]
                     )
                     obj = ObjectDetection(
-                        bbox = bbox,
+                        bbox=bbox,
                         confidence = obj_data.get("confidence", 0.0),
-                        object_class = obj_data.get("class", "unknown"),
-                        contains_screen = "monitor" in obj_data.get("class", "").lower() or "laptop" in obj_data.get("class", "").lower()
+                        object_class = obj_data.get("label", "unknown"),  # Matches tool output
+                        contains_screen = obj_data.get("contains_screen", False),
+                        attributes = {
+                            "is_privacy_relevant": obj_data.get("is_privacy_relevant", False),
+                            "risk_category": obj_data.get("risk_category", "other")
+                        }
                     )
                     detections.objects.append(obj)
+                privacy_count = data.get("privacy_relevant_count", 0)
+                print(f"  Object Detection: Found {len(data['objects'])} objects ({privacy_count} privacy-relevant)")
+        except Exception as e:
+            print(f"  Object Detection failed: {e}")
 
-        return detections
+    def _check_overlap(self, bbox: BoundingBox, existing_objects: list, threshold: float = 0.5) -> bool:
+        """
+        Check if bbox significantly overlaps with existing detections
+
+        Args:
+            bbox: BoundingBox to check
+            existing_objects: List of ObjectDetection objects
+            threshold: threshold to consider as duplicate
+
+        Returns:
+            True if overlaps significantly with existing detection
+        """
+        for obj in existing_objects:
+            # Calculating Intersection over Union
+            x1 = max(bbox.x, obj.bbox.x)
+            y1 = max(bbox.y, obj.bbox.y)
+            x2 = min(bbox.x + bbox.width, obj.bbox.x + obj.bbox.width)
+            y2 = min(bbox.y + bbox.height, obj.bbox.y + obj.bbox.height)
+
+            # No overlap
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            intersection = (x2 - x1) * (y2 - y1)
+            area1 = bbox.width * bbox.height
+            area2 = obj.bbox.width * obj.bbox.height
+            union = area1 + area2 - intersection
+
+            iou = intersection / union if union > 0 else 0
+            if iou > threshold:
+                return True
+
+        return False
 
     def _classify_size(self, width: int, height: int):
         """Classify face size"""
@@ -299,14 +254,3 @@ OBJECTS: [description or "None visible"]"""
             return "medium"
         else:
             return "small"
-
-    def _classify_text(self, text: str):
-        """Classify text type"""
-        if re.search(r"\d{3}[-.\s]?\d{3}[-.\s]?\d{4}", text):
-            return "phone_number"
-        elif re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b", text):
-            return "email"
-        elif re.search(r"\d{3}-\d{2}-\d{4}", text):
-            return "ssn"
-        else:
-            return "general_text"

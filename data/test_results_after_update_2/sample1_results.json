@@ -1,0 +1,154 @@
+{
+  "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample1.png",
+  "processing_time_ms": 4958.521127700806,
+  "total_detections": 13,
+  "faces": [
+    {
+      "bbox": [
+        410,
+        172,
+        242,
+        305
+      ],
+      "confidence": 0.9999995231628418,
+      "size": "medium",
+      "clarity": "high"
+    }
+  ],
+  "text_regions": [
+    {
+      "bbox": [
+        222,
+        1166,
+        257,
+        45
+      ],
+      "confidence": 0.9997830751694713,
+      "text_content": "Social Security",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        486,
+        1176,
+        44,
+        26
+      ],
+      "confidence": 0.9987673430229593,
+      "text_content": "#:",
+      "text_type": "general_text"
+    },
+    {
+      "bbox": [
+        211,
+        1210,
+        283,
+        44
+      ],
+      "confidence": 0.4871741907784306,
+      "text_content": "238-49-6521",
+      "text_type": "ssn"
+    },
+    {
+      "bbox": [
+        222,
+        1291,
+        515,
+        60
+      ],
+      "confidence": 0.854288448286417,
+      "text_content": "Bank Account: 8765 4321 0987",
+      "text_type": "bank_account"
+    },
+    {
+      "bbox": [
+        229,
+        1356,
+        216,
+        60
+      ],
+      "confidence": 0.9841940575250284,
+      "text_content": "PIN: 4821",
+      "text_type": "password"
+    },
+    {
+      "bbox": [
+        759,
+        1143,
+        168,
+        55
+      ],
+      "confidence": 0.9994777379151791,
+      "text_content": "Password:",
+      "text_type": "password"
+    },
+    {
+      "bbox": [
+        747,
+        1177,
+        191,
+        71
+      ],
+      "confidence": 0.5294221864506532,
+      "text_content": "Magicl231",
+      "text_type": "general_text"
+    }
+  ],
+  "objects": [
+    {
+      "bbox": [
+        0,
+        727,
+        630,
+        409
+      ],
+      "confidence": 0.9114096164703369,
+      "object_class": "laptop",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        0,
+        1100,
+        143,
+        108
+      ],
+      "confidence": 0.9064174294471741,
+      "object_class": "cell phone",
+      "contains_screen": true
+    },
+    {
+      "bbox": [
+        75,
+        1126,
+        807,
+        359
+      ],
+      "confidence": 0.3014827370643616,
+      "object_class": "book",
+      "contains_screen": false
+    },
+    {
+      "bbox": [
+        110,
+        1248,
+        765,
+        236
+      ],
+      "confidence": 0.2816741168498993,
+      "object_class": "book",
+      "contains_screen": false
+    },
+    {
+      "bbox": [
+        839,
+        24,
+        46,
+        138
+      ],
+      "confidence": 0.2609499394893646,
+      "object_class": "book",
+      "contains_screen": false
+    }
+  ]
+}

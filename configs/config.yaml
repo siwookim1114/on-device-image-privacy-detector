@@ -11,10 +11,11 @@ system:
 # Model Configurations
 models:
   detection:
-    face_detector: "mtcnn"
-    text_detector: "easyocr"
-    object_detector: "yolov8n"
+    face_detector: "mtcnn"  # MTCNN + FaceNet for embeddings
+    text_detector: "easyocr"  # EasyOCR for text recognition
+    object_detector: "yolo"  # YOLOv8 for object detection
     confidence_threshold: 0.7
+    yolo_model: "yolov8n.pt"  # nano model for speed
     
   risk_assessment:
     name: "microsoft/Phi-3.5-vision-instruct"
