@@ -1,7 +1,7 @@
 # Import required utils
 import torch
 from PIL import Image
-from typing import Any, List, Dict, Optional, ClassVar, Set, Tuple
+from typing import Any, List, Dict, Optional, ClassVar, Set, Tuple, Union
 import json
 import numpy as np
 import re
@@ -26,7 +26,6 @@ from utils.models import (
     PersonClassification
 )
 from utils.config import get_risk_color
-
 ## Detection Tools for Detection Agent
 
 class FaceDetectionTool(BaseTool):
@@ -578,7 +577,7 @@ class FaceRiskAssessmentTool(BaseTool):
     SIZE_ESCALATION = {
         "large": 2,                         # Large faces are highly identifiable
         "medium": 1,                        # Medium faces moderately identifiable
-        "low": -1                           # Small faces less identifiable
+        "low": 0                           # Small faces less identifiable
     }
 
     CLARITY_ESCALATION = {
@@ -594,12 +593,13 @@ class FaceRiskAssessmentTool(BaseTool):
 
     def _get_base_risk(self, consent_status: str) -> RiskLevel:
         """Get base risk from user's privacy profile based on consent status. (User's privacy preferences)"""
-        if consent_status == "explicit":    # If the person in the photo has explicitly given permission (user's own face or someone who has clearly consented)
-            sensitivity = self.privacy_profile.identity_sensitivity.get("own_face", "low")
-        elif consent_status == "assumed":   # Likely a known contact like friend or family from embeddings -> People who have a history of appearing in photos with consent
-            sensitivity = self.privacy_profile.identity_sensitivity.get("friend_faces", "medium")
-        else:
-            sensitivity = self.privacy_profile.identity_sensitivity.get("bystander_faces", "critical")
+        key_map = {
+            "explicit": "own_face",
+            "assumed": "friend_faces",
+            "none": "bystander_faces"
+        }
+        key = key_map.get(consent_status, "bystander_faces")
+        sensitivity = self.privacy_profile.identity_sensitivity.get(key, "critical")
         return self.SENSITIVITY_TO_RISK.get(sensitivity, RiskLevel.HIGH)
     
     def _escalate_risk(self, base_risk: RiskLevel, escalation: int) -> RiskLevel:
@@ -674,11 +674,14 @@ class FaceRiskAssessmentTool(BaseTool):
             bbox = BoundingBox(x=bbox_list[0], y=bbox_list[1], width=bbox_list[2], height=bbox_list[3])
 
             size = data.get("size", "medium")
-            clarity = data.get("clarity", "medium")
             confidence = data.get("confidence", 0.0)
+
             consent_status = data.get("attributes", {}).get("consent_status", "none")
             image_width = data.get("image_width", 1920)
             image_height = data.get("image_height", 1080)
+
+            # Infer clarity from quality indicators
+            clarity = data.get("clarity", "medium")
 
             # Calculate all factors
 
@@ -720,18 +723,12 @@ class FaceRiskAssessmentTool(BaseTool):
                 "user_sensitivity_applied": sensitivity_applied,
                 "bbox": bbox.to_list(),
                 "requires_protection": requires_protection,
-                "assessment_confidence": confidence,
                 # Structured factors for VLM reasoning
                 "factors": {
-                    "consent_status": consent_status,
-                    "consent_explanation": self._explain_consent_status(consent_status),
                     "base_risk": base_risk.value,
                     "size": size,
                     "size_explanation": self._explain_size(size),
                     "size_escalation": size_esc,
-
-                    "consent_confidence": 0.0,
-                    "assessment_confidence": confidence,
                     "escalation_applied": total_escalation,
                     "clarity": clarity,
                     "clarity_explanation": self._explain_clarity(clarity),
@@ -740,12 +737,11 @@ class FaceRiskAssessmentTool(BaseTool):
                     "position_escalation": position_esc,
                     "detection_confidence": confidence,
                     "confidence_adjustment": confidence_esc,
-                    "total_escalation": total_escalation,
-                    "final_risk": final_risk.value,
                     "image_dimensions": f"{image_width}x{image_height}"
                 },
                 # Consent metadata
                 "consent_status": consent_status,
+                "consent_explanation": self._explain_consent_status(consent_status),
                 "consent_confidence": 0.0
             })
 
@@ -756,3 +752,186 @@ class FaceRiskAssessmentTool(BaseTool):
                 "severity": RiskLevel.HIGH.value,
                 "requires_protection": True
             })
+
+class TextRiskAssessmentTool(BaseTool):
+    """
+    Pure text risk calculation tool.
+
+    Calculates PII classification and risk factors WITHOUT generating reasoning.
+    Returns structured data for agent to use in VLM reasoning.
+
+    Features:
+    1. Multi-pattern PII detection (SSN, credit cards, phone, email, etc.)
+    2. Risk level calculation based on text type
+    3. Confidence-based adjustments
+    """
+    name: str = "assess_text_risk"
+    description: str = (
+        "Calculates comprehensive privacy risk factors for detected text using "
+        "pattern matching, PII classification, and sensitivity analysis."
+        "Use this tool when doing risk assessments on detected texts."
+    )
+    config: Any = None
+    privacy_profile: PrivacyProfile = None
+
+    # RISK_PATTERNS = {
+    #     "critical_patterns": {
+    #         "ssn": r'\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b',
+    #         "credit_card": r'\b(?:\d{4}[-.\s]?){3}\d{4}\b',
+    #         "bank_account": r'\b\d{10,17}\b',
+    #         "routing_number": r'\b\d{9}\b',
+    #         "password": r'\b(password|pwd|pass|pin)\s*[:=]\s*\S+',
+    #     },
+    #     "high_patterns": {
+    #         "phone": r'\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
+    #         "email": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+    #         "address": r'\b\d+\s+[\w\s]+(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd)\b',
+    #     }
+    # }
+
+    RISK_TYPES = {
+        "critical_types": {
+            "ssn", "social_security", "credit_card", "bank_account",
+            "password", "pin", "routing_number", "cvv", "api_key", "secret"
+        },
+        "high_risk_types": {
+            "phone", "phone_number", "email", "address",
+            "date_of_birth", "dob", "license", "passport",
+            "id_number", "medical_record", "employee_id"
+        },
+        "medium_risk_types": {
+            "name", "username", "account_number", "student_id"
+        }
+    }
+
+    # Sensitivity mapping
+    TYPE_TO_SENSITIVITY = {
+        "ssn": "personal_numbers",
+        "credit_card": "financial_data",
+        "bank_account": "financial_data",
+        "phone": "personal_numbers",
+        "phone_number": "personal_numbers",
+        "email": "personal_numbers",
+        "address": "personal_numbers",
+        "password": "personal_numbers",
+        "general_text": "documents"
+    }
+
+    def __init__(self, config, privacy_profile: PrivacyProfile = None, **kwargs):
+        super().__init__(**kwargs)
+        self.config = config
+        self.privacy_profile = privacy_profile if privacy_profile else PrivacyProfile()
+    
+    def _get_risk_level(
+        self,
+        text_type: str,
+        is_pii: bool,
+        is_critical: bool,
+        confidence: float
+    ) -> RiskLevel:
+        """
+        Determine risk level based on text classification.
+
+        Args:
+            text_classification: (text_type, is_pii, is_critical) from _classify_text
+            confidence: OCR confidence score
+        
+        Returns:
+            RiskLevel enum
+        """
+        text_type = text_type.lower() if text_type else ""
+        # CRITICAL: Already identified as critical by pattern matching
+        if is_critical or text_type in self.RISK_TYPES['critical_types']:
+            return RiskLevel.CRITICAL
+        elif is_pii or text_type in self.RISK_TYPES['high_risk_types']:
+            # High confidence PII = HIGH risk
+            # Low confidence PII = Medium risk (might be OCR error)
+            return RiskLevel.HIGH if confidence > 0.6 else RiskLevel.MEDIUM
+        # CRITICAL: Double-check specific critical types as fallback
+        elif text_type in self.RISK_TYPES['medium_risk_types']:
+            return RiskLevel.MEDIUM if confidence > 0.5 else RiskLevel.LOW
+        else:
+            return RiskLevel.LOW
+        
+    def _explain_text_type(self, text_type: str, is_pii: bool, is_critical: bool) -> str:
+        """Get human-readable text type explanation."""
+        if is_critical:
+            return f"critical data type: {text_type}"
+        elif is_pii:
+            return f"personally identifiable information: {text_type}"
+        else:
+            return f"general text: {text_type}"
+    
+    def _run(self, text_json: str) -> str:
+        """
+        Calculate risk factors using text data.
+
+        Args:
+            text_json: JSON with text data from TextDetectionTool
+
+        Returns:
+            JSON with calculated factors
+        """
+        try:
+            data = json.loads(text_json)
+
+            # Extract data
+            text_id = data.get("id", "unknown")
+            text_content = data.get("text_content", "")
+            bbox_list = data.get("bbox", [0, 0, 0, 0])
+            bbox = BoundingBox(x = bbox_list[0], y = bbox_list[1], width = bbox_list[2], height = bbox_list[3])
+            confidence = data.get("confidence", 0)
+            text_type = data.get("text_type", "general_text")
+            is_pii = data.get("attributes", {}).get("is_pii", False)
+            is_critical = data.get("attributes", {}).get("is_critical", False)
+
+            # Calculate risk level
+            risk_level = self._get_risk_level(text_type, is_pii, is_critical, confidence)
+
+            # Get user sensitivity
+            sensitivity_category = self.TYPE_TO_SENSITIVITY.get(text_type, "documents")
+            user_sensitivity = self.privacy_profile.information_sensitivity.get(sensitivity_category, "high")
+            
+            # Content preview (masked if sensitive)
+            if is_critical or is_pii:
+                content_preview = f"[{text_type.upper()}_REDACTED]"
+            else:
+                content_preview = risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
+            
+            requires_protection = risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
+
+            return json.dumps({
+                "detection_id": text_id,
+                "element_type": "text",
+                "element_description": f"Text: {text_type}",
+                "risk_type": RiskType.INFORMATION_DISCLOSURE.value,
+                "severity": risk_level.value,
+                "color_code": get_risk_color(self.config, risk_level.value),
+                "user_sensitivity_applied": user_sensitivity,
+                "bbox": bbox.to_list(),
+                "requires_protection": requires_protection,
+                "factors": {
+                    "text_type": text_type, 
+                    "text_type_explanation": self._explain_text_type(text_type, is_pii, is_critical),
+                    "is_pii": is_pii,     
+                    "is_critical": is_critical,
+                    "content_preview": content_preview,
+                    "ocr_confidence": confidence,
+                    "sensitivity_category": sensitivity_category,
+                    "user_sensitivity": user_sensitivity
+                }
+            })
+        
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+                "detection_id": "unknown",
+                "severity": RiskLevel.HIGH.value,
+                "requires_protection": True
+            })
+
+
+
+
+
+    
