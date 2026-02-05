@@ -1,7 +1,7 @@
 # Import required utils
 import torch
 from PIL import Image
-from typing import Any, List, Dict, Optional, ClassVar, Set
+from typing import Any, List, Dict, Optional, ClassVar, Set, Tuple
 import json
 import numpy as np
 import re
@@ -12,6 +12,22 @@ from facenet_pytorch import InceptionResnetV1  # Face Embeddings (for Future Con
 import easyocr
 from ultralytics import YOLO         # Object Detection (YOLO)
 from langchain.tools import BaseTool
+from utils.models import (
+    RiskLevel,
+    RiskType,
+    PrivacyProfile,
+    BoundingBox,
+    RiskAssessment,
+    FaceDetection,
+    TextDetection,
+    ObjectDetection,
+    DetectionResults,
+    ConsentStatus,
+    PersonClassification
+)
+from utils.config import get_risk_color
+
+## Detection Tools for Detection Agent
 
 class FaceDetectionTool(BaseTool):
     """
@@ -223,7 +239,6 @@ class TextDetectionTool(BaseTool):
     description: str = (
         "Detects and recognizes text in the image using OCR. "
         "Returns detected text content and locations. "
-        "Use this tool when you see text, numbers, signs, or documents in the image."
     )
     detector: Any = None
     config: Any = None
@@ -394,7 +409,6 @@ class ObjectDetectionTool(BaseTool):
     description: str = (
         "Detects objects in the image like cars, laptops, phones, screens, etc. "
         "Returns list of detected objects with locations. "
-        "Use this tool when you see vehicles, electronic devices, or any other items or objects."
     )
 
     detector: Any = None
@@ -505,3 +519,240 @@ class ObjectDetectionTool(BaseTool):
 
         except Exception as e:
             return json.dumps({"error": str(e), "objects": [], "count": 0})
+
+
+## Risk Assessment Tools
+"""
+Risk Assessment Tools - Specialized tools for comprehensive privacy risk analysis
+The agent uses these factors to generate VLM-based reasoning.
+
+  Architecture:
+      Tools = Pure calculation (fast, deterministic)
+      Agent = VLM reasoning (contextual, batched)
+
+  Phase 1: Individual Element Assessment (rule-based calculation)
+      - FaceRiskAssessmentTool
+      - TextRiskAssessmentTool
+      - ObjectRiskAssessmentTool
+
+  Phase 2: Contextual Enhancement (spatial reasoning)
+      - SpatialRelationshipTool
+      - ConsentInferenceTool
+      - RiskEscalationTool
+
+  Phase 3: Validation & Filtering (quality control)
+      - FalsePositiveFilterTool
+      - ConsistencyValidationTool
+"""
+
+class FaceRiskAssessmentTool(BaseTool):
+    """
+    Advance face privacy risk assessment with multi-factor scoring
+    Returns structured data for agent to use in VLM reasoning. 
+
+    Factors considered:
+    1. Base risk: User sensitivity + consent status settings 
+    2. Face size (large = more identifiable)
+    3. Face clarity (clear = more identifiable)
+    4. Face position (center = likely subject, edge = likely bystander)
+    5. Confidence Adjustment (low confidence = uncertain)
+    6. Final risk level (after all escalations)
+    """
+    name: str = "assess_face_risk"
+    description: str = (
+        "Performs comprehensive privacy risk assessment for detected faces using "
+        "multi-factor analysis including size, clarity, position, and user sensitivity. " \
+        "Use this tool when doing risk assessments on detected faces"
+    )
+    config: Any = None
+    privacy_profile: PrivacyProfile = None
+
+    # Risk escalation mappings
+    SENSITIVITY_TO_RISK = {
+        "critical": RiskLevel.CRITICAL,     
+        "high": RiskLevel.HIGH,             
+        "medium": RiskLevel.MEDIUM,         
+        "low": RiskLevel.LOW        
+    }
+
+    SIZE_ESCALATION = {
+        "large": 2,                         # Large faces are highly identifiable
+        "medium": 1,                        # Medium faces moderately identifiable
+        "low": -1                           # Small faces less identifiable
+    }
+
+    CLARITY_ESCALATION = {
+        "high": 1,                          # Clear faces are easily identifiable
+        "medium": 0,                        # Normal clarity
+        "low": -1                           # Blurry/obscured faces harder to identify
+    }
+
+    def __init__(self, config, privacy_profile: PrivacyProfile = None, **kwargs):
+        super().__init__(**kwargs)
+        self.config = config
+        self.privacy_profile = privacy_profile if privacy_profile else PrivacyProfile()
+
+    def _get_base_risk(self, consent_status: str) -> RiskLevel:
+        """Get base risk from user's privacy profile based on consent status. (User's privacy preferences)"""
+        if consent_status == "explicit":    # If the person in the photo has explicitly given permission (user's own face or someone who has clearly consented)
+            sensitivity = self.privacy_profile.identity_sensitivity.get("own_face", "low")
+        elif consent_status == "assumed":   # Likely a known contact like friend or family from embeddings -> People who have a history of appearing in photos with consent
+            sensitivity = self.privacy_profile.identity_sensitivity.get("friend_faces", "medium")
+        else:
+            sensitivity = self.privacy_profile.identity_sensitivity.get("bystander_faces", "critical")
+        return self.SENSITIVITY_TO_RISK.get(sensitivity, RiskLevel.HIGH)
+    
+    def _escalate_risk(self, base_risk: RiskLevel, escalation: int) -> RiskLevel:
+        """Escalate or de-escalate risk level by specified amount."""
+        risk_order = [RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH, RiskLevel.CRITICAL]
+        current_idx = risk_order.index(base_risk)
+        new_idx = max(0, min(current_idx + escalation, len(risk_order) - 1))
+        return risk_order[new_idx]
+    
+    def _calculate_position_factor(self, bbox: BoundingBox, image_width: int, image_height: int) -> Tuple[int, str]:
+        """
+        Calculate position-based risk factor.
+        Center faces = likely subjects (lower risk if user photo)
+        Edge faces = likely bystanders (higher risk)
+        """
+        center_x = bbox.x + bbox.width / 2
+        center_y = bbox.y + bbox.height / 2
+        rel_x = center_x / image_width
+        rel_y = center_y / image_height
+
+        # Check if face is in central region (30% - 70% on both axes)
+        if 0.3 <= rel_x <= 0.7 and 0.3 <= rel_y <= 0.7:
+            return (0, "centered (likely subject)")
+        elif rel_x < 0.2 or rel_x > 0.8 or rel_y < 0.2 or rel_y > 0.8:
+            return (1, "edge position (likely bystander)")
+        else:
+            return (0, "intermediate position")
+    
+    def _explain_consent_status(self, consent_status: str) -> str:
+        """Get human-readable consent explanation."""
+        if consent_status == "none":
+            return "unknown person, likely bystander without consent"
+        elif consent_status == "explicit":
+            return "person with explicit consent"
+        elif consent_status == "assumed":
+            return "known person with assumed consent"
+        else:
+            return f"person with {consent_status} consent status"
+    
+    def _explain_size(self, size: str) -> str:
+        "Get human-readable size explanation."
+        return {
+            "large": "prominent and highly identifiable",
+            "medium": "moderately visible",
+            "small": "background presence, less identifiable"
+        }.get(size, "normal_visibility")
+
+    def _explain_clarity(self, clarity: str) -> str:
+        """Get human-readable clarity explanation."""
+        return {
+            "high": "clear and easily identifiable",
+            "medium": "normal clarity",
+            "low": "blurry or obscured, harder to identify"
+        }.get(clarity, "normal clarity")
+    
+    def _run(self, face_json: str) -> str:
+        """
+        Calculate all risk factors for a detected face.
+
+        Args:
+            face_json: JSON with face data including id, bbox, size, clarity, confidence, attributes
+
+        Returns:
+            JSON with calculated factors 
+        """
+        try:
+            data = json.loads(face_json)
+
+            # Extract face properties
+            face_id = data.get("id", "unknown")
+            bbox_list = data.get("bbox", [0, 0, 0, 0])
+            bbox = BoundingBox(x=bbox_list[0], y=bbox_list[1], width=bbox_list[2], height=bbox_list[3])
+
+            size = data.get("size", "medium")
+            clarity = data.get("clarity", "medium")
+            confidence = data.get("confidence", 0.0)
+            consent_status = data.get("attributes", {}).get("consent_status", "none")
+            image_width = data.get("image_width", 1920)
+            image_height = data.get("image_height", 1080)
+
+            # Calculate all factors
+
+            # Step 1: Get base risk from user sensitivity
+            base_risk = self._get_base_risk(consent_status)
+
+            # Step 2: Calculate escalation factors
+            size_esc = self.SIZE_ESCALATION.get(size, 0)
+            clarity_esc = self.CLARITY_ESCALATION.get(clarity, 0)
+            position_esc, position_desc = self._calculate_position_factor(bbox, image_width, image_height)
+
+            # Confidence adjustment: very low confidence reduces risk
+            confidence_esc = -1 if confidence < 0.85 else 0
+
+            # Total escalation
+            total_escalation = size_esc + clarity_esc + position_esc + confidence_esc
+
+            # Step 3: Calculate final risk
+            final_risk = self._escalate_risk(base_risk, total_escalation)
+
+            # Step 4: Determine protection requirement
+            requires_protection = final_risk in [RiskLevel.CRITICAL, RiskLevel.HIGH]
+
+            # Get sensitivity applied
+            sensitivity_applied = {
+                "none": "bystander_faces",
+                "explicit": "own_face",
+                "assumed": "friend_faces"
+            }.get(consent_status, "bystander_faces")
+
+            # Return structured factors
+            return json.dumps({
+                "detection_id": face_id,
+                "element_type": "face",
+                "element_description": f"Face ({size}, {clarity} clarity)",
+                "risk_type": RiskType.IDENTITY_EXPOSURE.value,
+                "severity": final_risk.value,
+                "color_code": get_risk_color(self.config, final_risk.value),
+                "user_sensitivity_applied": sensitivity_applied,
+                "bbox": bbox.to_list(),
+                "requires_protection": requires_protection,
+                "assessment_confidence": confidence,
+                # Structured factors for VLM reasoning
+                "factors": {
+                    "consent_status": consent_status,
+                    "consent_explanation": self._explain_consent_status(consent_status),
+                    "base_risk": base_risk.value,
+                    "size": size,
+                    "size_explanation": self._explain_size(size),
+                    "size_escalation": size_esc,
+
+                    "consent_confidence": 0.0,
+                    "assessment_confidence": confidence,
+                    "escalation_applied": total_escalation,
+                    "clarity": clarity,
+                    "clarity_explanation": self._explain_clarity(clarity),
+                    "clarity_escalation": clarity_esc,
+                    "position": position_desc,
+                    "position_escalation": position_esc,
+                    "detection_confidence": confidence,
+                    "confidence_adjustment": confidence_esc,
+                    "total_escalation": total_escalation,
+                    "final_risk": final_risk.value,
+                    "image_dimensions": f"{image_width}x{image_height}"
+                },
+                # Consent metadata
+                "consent_status": consent_status,
+                "consent_confidence": 0.0
+            })
+
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+                "detection_id": "unknown",
+                "severity": RiskLevel.HIGH.value,
+                "requires_protection": True
+            })

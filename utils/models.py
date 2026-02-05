@@ -163,6 +163,7 @@ class ObjectDetection(Detection):
 class DetectionResults(BaseModel):
     """Complete detection results"""
     image_path: str
+    annotated_image_path: Optional[str] = None  # Path to visualized image with bounding boxes
     faces: List[FaceDetection] = Field(default_factory = list)
     text_regions: List[TextDetection] = Field(default_factory = list)
     objects: List[ObjectDetection] = Field(default_factory = list)

@@ -1,6 +1,6 @@
 import torch
-from PIL import Image
-from typing import List, Tuple
+from PIL import Image, ImageDraw, ImageFont
+from typing import List, Tuple, Optional
 from pathlib import Path
 import time
 import json
@@ -38,6 +38,8 @@ class DetectionAgent:
         """
         self.config = config
         self.device = torch.device(config.system.device)
+        self._annotated_image: Optional[Image.Image] = None  # Stores annotated image in memory
+
         print(f"Initializing Detection Agent on {self.device}")
 
         # Initialize detection tools
@@ -45,16 +47,21 @@ class DetectionAgent:
         self.text_tool = TextDetectionTool(config)   # EasyOCR
         self.object_tool = ObjectDetectionTool(config) # YOLO
 
-    def run(self, image_path: str) -> DetectionResults:
+    def run(self, image_path: str, create_annotated: bool = True) -> DetectionResults:
         """
         Main detection pipeline = runs ALL detection tools
 
         Args:
             image_path: Path to input image
+            create_annotated: Whether to create annotated image in memory (default: True)
+                              Access via get_annotated_image() after run
+
         Returns:
             DetectionResults with all detections
         """
         start_time = time.time()
+        self._annotated_image = None  # Reset from previous run
+
         try:
             print(f"=" * 60)
             print(f"Processing: {Path(image_path).name}")
@@ -72,7 +79,7 @@ class DetectionAgent:
                 print(f"Resized to {new_size}\n")
 
             # Initialize results container
-            detections = DetectionResults(image_path = image_path)
+            detections = DetectionResults(image_path=image_path)
 
             # Stage 1: Run ALL detection tools
             print("\nRunning Detection Tools:")
@@ -82,6 +89,11 @@ class DetectionAgent:
             self._run_face_detection(image_path, detections)
             self._run_text_detection(image_path, detections)
             self._run_object_detection(image_path, detections)
+
+            # Stage 2: Create annotated image in memory (for downstream agents)
+            if create_annotated:
+                self._annotated_image = self._create_annotated_image(image_path, detections)
+                print(f"  Annotated image created (in memory)")
 
             # Processing time
             processing_time = (time.time() - start_time) * 1000
@@ -96,6 +108,7 @@ class DetectionAgent:
             print(f"    - Faces: {len(detections.faces)}")
             print(f"    - Text regions: {len(detections.text_regions)}")
             print(f"    - Objects: {len(detections.objects)}")
+            print(f"  Annotated image: {'Ready (in memory)' if self._annotated_image else 'Not created'}")
             print(f"{'='*60}\n")
 
             return detections
@@ -254,3 +267,97 @@ class DetectionAgent:
             return "medium"
         else:
             return "small"
+    
+    def _create_annotated_image(self, image_path: str, detections: DetectionResults) -> Image.Image:
+        """
+        Create annotated image with bounding boxes (in memory, no disk write).
+
+        Color coding:
+        - Red: Faces (identity exposure risk)
+        - Green: Text regions (information disclosure risk)
+        - Blue: Objects (context exposure risk)
+
+        Args:
+            image_path: Path to original image
+            detections: DetectionResults object
+
+        Returns:
+            PIL Image with bounding boxes drawn (in memory)
+        """
+        # Load image
+        image = Image.open(image_path).convert("RGB")
+        draw = ImageDraw.Draw(image)
+
+        # Try to load a font, fall back to default if not available
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 16)
+            small_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 12)
+        except:
+            font = ImageFont.load_default()
+            small_font = ImageFont.load_default()
+
+        # Draw faces (red boxes)
+        for face in detections.faces:
+            bbox = face.bbox
+            x1, y1 = bbox.x, bbox.y
+            x2, y2 = bbox.x + bbox.width, bbox.y + bbox.height
+
+            draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
+            label = f"Face {face.confidence:.2f}"
+            label_y = max(0, y1 - 20)
+            draw.text((x1, label_y), label, fill="red", font=font)
+
+        # Draw text regions (green boxes)
+        for text_region in detections.text_regions:
+            bbox = text_region.bbox
+            x1, y1 = bbox.x, bbox.y
+            x2, y2 = bbox.x + bbox.width, bbox.y + bbox.height
+
+            draw.rectangle([x1, y1, x2, y2], outline="green", width=2)
+            # Show text type if classified, otherwise content preview
+            if text_region.text_type and text_region.text_type != "general_text":
+                label = f"Text: {text_region.text_type}"
+            else:
+                label = f"Text: {text_region.text_content[:20]}"
+            label_y = max(0, y1 - 18)
+            draw.text((x1, label_y), label, fill="green", font=small_font)
+
+        # Draw objects (blue boxes)
+        for obj in detections.objects:
+            bbox = obj.bbox
+            x1, y1 = bbox.x, bbox.y
+            x2, y2 = bbox.x + bbox.width, bbox.y + bbox.height
+
+            draw.rectangle([x1, y1, x2, y2], outline="blue", width=2)
+            label = f"{obj.object_class} {obj.confidence:.2f}"
+            label_y = max(0, y1 - 20)
+            draw.text((x1, label_y), label, fill="blue", font=font)
+
+        return image
+
+    def get_annotated_image(self) -> Optional[Image.Image]:
+        """
+        Get the annotated image from the last run.
+
+        Returns:
+            PIL Image with bounding boxes, or None if no image processed yet
+        """
+        return getattr(self, '_annotated_image', None)
+
+    def save_annotated_image(self, output_path: str) -> str:
+        """
+        Save the annotated image to disk.
+
+        Args:
+            output_path: Path to save the image
+
+        Returns:
+            Path where image was saved
+        """
+        if self._annotated_image is None:
+            raise ValueError("No annotated image available. Run detection first.")
+
+        self._annotated_image.save(output_path)
+        print(f"Annotated image saved: {output_path}")
+        return output_path
+            
