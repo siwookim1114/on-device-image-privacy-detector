@@ -14,7 +14,6 @@ from utils.models import (
 )
 from agents.tools import FaceDetectionTool, TextDetectionTool, ObjectDetectionTool
 
-
 class DetectionAgent:
     """
     Agent 1: Detection Agent (Vision Specialist)
@@ -144,7 +143,7 @@ class DetectionAgent:
                         attributes = {
                             "has_landmarks": face_data.get("has_landmarks", False),
                             "has_embedding": face_data.get("has_embedding", False),
-                            "embedding": face_data.get("embedding")
+                            "embedding": face_data.get("embedding")  
                         }
                     )
                     detections.faces.append(face)

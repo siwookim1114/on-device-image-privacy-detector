@@ -140,6 +140,11 @@ class Detection(BaseModel):
 
 class FaceDetection(Detection):
     """Face detection result"""
+    # id: str = Field(default_factory = lambda: str(uuid.uuid4()))
+    # category: str
+    # bbox: BoundingBox
+    # confidence: float = Field(ge = 0.0, le= 1.0)      # Confidence always 0 <= x <= 1
+    # attributes: Dict[str, Any] = Field(default_factory = dict)
     category: str = "face"
     landmarks: Optional[Dict[str, Tuple[int, int]]] = None
     angle: Optional[str] = None    # frontal, side_profile, etc
@@ -148,6 +153,11 @@ class FaceDetection(Detection):
 
 class TextDetection(Detection):
     """Text/OCR detection result"""
+    # id: str = Field(default_factory = lambda: str(uuid.uuid4()))
+    # category: str
+    # bbox: BoundingBox
+    # confidence: float = Field(ge = 0.0, le= 1.0)      # Confidence always 0 <= x <= 1
+    # attributes: Dict[str, Any] = Field(default_factory = dict)
     category: str = "text"
     text_content: str
     text_type: Optional[str] = None   # phone_number, name, etc
@@ -155,6 +165,11 @@ class TextDetection(Detection):
 
 class ObjectDetection(Detection):
     """Object detection result"""
+    # id: str = Field(default_factory = lambda: str(uuid.uuid4()))
+    # category: str
+    # bbox: BoundingBox
+    # confidence: float = Field(ge = 0.0, le= 1.0)      # Confidence always 0 <= x <= 1
+    # attributes: Dict[str, Any] = Field(default_factory = dict)
     category: str = "object"
     object_class: str
     contains_text: bool = False

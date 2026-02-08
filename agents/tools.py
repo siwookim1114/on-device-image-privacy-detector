@@ -39,6 +39,7 @@ class FaceDetectionTool(BaseTool):
     description: str = (
         "Detects human faces in the image. "
         "Returns list of face locations with confidence scores, and embeddings for identity matching. "
+        "Use this tool when you need to detect and locate all faces in an image during the detection phase."
     )
     detector: Any = None
     embedding_model: Any = None
@@ -238,6 +239,7 @@ class TextDetectionTool(BaseTool):
     description: str = (
         "Detects and recognizes text in the image using OCR. "
         "Returns detected text content and locations. "
+        "Use this tool when you need to detect and extract all text regions in an image during the detection phase."
     )
     detector: Any = None
     config: Any = None
@@ -408,6 +410,7 @@ class ObjectDetectionTool(BaseTool):
     description: str = (
         "Detects objects in the image like cars, laptops, phones, screens, etc. "
         "Returns list of detected objects with locations. "
+        "Use this tool when you need to detect privacy-relevant objects in an image during the detection phase."
     )
 
     detector: Any = None
@@ -550,7 +553,7 @@ class FaceRiskAssessmentTool(BaseTool):
     Returns structured data for agent to use in VLM reasoning. 
 
     Factors considered:
-    1. Base risk: User sensitivity + consent status settings 
+    1. Base risk: User sensitivity + consent status settings
     2. Face size (large = more identifiable)
     3. Face clarity (clear = more identifiable)
     4. Face position (center = likely subject, edge = likely bystander)
@@ -577,7 +580,7 @@ class FaceRiskAssessmentTool(BaseTool):
     SIZE_ESCALATION = {
         "large": 2,                         # Large faces are highly identifiable
         "medium": 1,                        # Medium faces moderately identifiable
-        "low": 0                           # Small faces less identifiable
+        "small": 0                          # Small faces less identifiable
     }
 
     CLARITY_ESCALATION = {
@@ -896,14 +899,14 @@ class TextRiskAssessmentTool(BaseTool):
             if is_critical or is_pii:
                 content_preview = f"[{text_type.upper()}_REDACTED]"
             else:
-                content_preview = risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
+                content_preview = text_content[:30] + "..." if len(text_content) > 30 else text_content
             
             requires_protection = risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
 
             return json.dumps({
                 "detection_id": text_id,
                 "element_type": "text",
-                "element_description": f"Text: {text_type}",
+                "element_description": f"Text: {text_content}",
                 "risk_type": RiskType.INFORMATION_DISCLOSURE.value,
                 "severity": risk_level.value,
                 "color_code": get_risk_color(self.config, risk_level.value),
@@ -930,8 +933,519 @@ class TextRiskAssessmentTool(BaseTool):
                 "requires_protection": True
             })
 
+class ObjectRiskAssessmentTool(BaseTool):
+    name: str = "assess_object_risk"
+    description: str = (
+        "Calculates privacy risk for pre-classified objects from ObjectDetectionTool. "
+        "Use this tool when doing risk assessments on detected privacy-relevant objects."
+    )
+    config: Any = None
+    privacy_profile: PrivacyProfile = None
 
+    def __init__(self, config, privacy_profile: PrivacyProfile = None, **kwargs):
+        super().__init__(**kwargs)
+        self.config = config
+        self.privacy_profile = privacy_profile if privacy_profile else PrivacyProfile()
 
+    def _get_risk_level(self, risk_category: str, contains_screen: bool) -> RiskLevel:
+        """
+        Calculate risk level from pre-classified risk category.
+        
+        ObjectDetectionTool already classified objects into risk categories.
+        """
 
+        # Screen devices with visible content
+        if contains_screen or risk_category == "screen_device":
+            return RiskLevel.HIGH
+        
+        # Vehicles (licsense plate risk)
+        if risk_category == "vehicle":
+            return RiskLevel.MEDIUM
+        
+        # Personal items, input devices
+        if risk_category in ["personal_items", "input_devices"]:
+            return RiskLevel.LOW
 
+        # Other privacy-relevant objects
+        return RiskLevel.LOW
+
+    def _get_risk_type(self, risk_category: str, contains_screen: bool) -> RiskType:
+        """Determine risk type from risk_category"""        
+        if contains_screen or risk_category == "screen_device":
+            return RiskType.INFORMATION_DISCLOSURE
+        
+        if risk_category == "vehicle":
+            return RiskType.LOCATION_EXPOSURE
+        
+        return RiskType.CONTEXT_EXPOSURE
     
+    def _explain_object_category(self, risk_category: str, label: str) -> str:
+        """Human-readable object category explanation"""
+        explanations = {
+            "screen_device": f"{label} with potentially visible screen content",
+            "vehicle": f"{label} that may show license plate",
+            "personal_item": f"{label} (personal belonging)",
+            "input_device": f"{label} (computer peripheral)",
+            "other": f"{label} (privacy-relevant object)"
+        }
+        return explanations.get(risk_category, f"{label}")
+    
+    def _run(self, object_json: str) -> str:
+        """
+        Calculate risk factors using pre-classified object data.
+
+        Args:
+            object_json: JSON with object data from ObjectDetectionTool
+        
+        Returns:
+            JSON with calculated factors or filtered status
+        """
+        try:
+            data = json.loads(object_json)
+
+            # Extract pre-classified data from ObjectDetectionTool
+            obj_id = data.get("id", "unknown")
+            obj_label = data.get("object_class", "unknown")
+            bbox_list = data.get("bbox", [0, 0, 0, 0])
+            bbox = BoundingBox(x = bbox_list[0], y = bbox_list[1], width = bbox_list[2], height = bbox_list[3])
+            confidence = data.get("confidence", 0.0)
+
+            # Use existing classification
+            is_privacy_relevant = data.get("attributes", {}).get("is_privacy_relevant", True)
+            risk_category = data.get("attributes", {}).get("risk_category", "other")
+            contains_screen = data.get("contains_screen", False) 
+
+            # Objects already filtered by ObjectDetectionTool
+            if not is_privacy_relevant:
+                return json.dumps({
+                    "detection_id": obj_id,
+                    "filtered": True,
+                    "reason": f"Object '{obj_label}' marked as not privacy-relevant"
+                })
+            
+            # Calculate risk from existing classification
+            risk_level = self._get_risk_level(risk_category, contains_screen)
+            risk_type = self._get_risk_type(risk_category, contains_screen)
+
+            # Get user sensitivity
+            if risk_category == "screen_device":
+                user_sensitivity = self.privacy_profile.information_sensitivity.get("screens", "high")
+            elif risk_category == "vehicle":
+                user_sensitivity = self.privacy_profile.location_sensitivity.get("license_plates", "high")
+            else:
+                user_sensitivity = self.privacy_profile.context_sensitivity.get("background_items", "medium")
+            
+            requires_protection = contains_screen or risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
+
+            return json.dumps({
+                "detection_id": obj_id,
+                "element_type": "object",
+                "element_description": f"Object: {obj_label}",
+                "risk_type": risk_type.value,
+                "severity": risk_level.value,
+                "color_code": get_risk_color(self.config, risk_level.value),
+                "user_sensitivity_applied": user_sensitivity,
+                "bbox": bbox.to_list(),
+                "requires_protection": requires_protection,
+                "filtered": False,
+                "factors": {
+                    "object_category": self._explain_object_category(risk_category, obj_label),
+                    "risk_category": risk_category,     # From ObjectDetectionTool
+                    "contains_screen": contains_screen,
+                    "detection_confidence": confidence,
+                }
+            })
+        
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+                "detection_id": "unknown",
+                "filtered": True,
+                "reason": f"Assessment error: {str(e)}"
+            })
+        
+# Contextual Enhancement Tools
+class SpatialRelationshipTool(BaseTool):
+    """Analyze spatial relationships between detected elements."""
+    name: str = "analyze_spatial_relationship"
+    description: str = (
+        "Analyzes spatial proximity and relationships between elements "
+        "to identify compounded privacy risks. "
+        "Use this tool when you need to find spatial relationships between detected elements (e.g., face near PII text, face near screen)."
+    )
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def _calculate_distance(self, bbox1: Dict, bbox2: Dict) -> float:
+        """Calculate Euclidean distance between bbox centers."""
+        if isinstance(bbox1, list):
+            center1_x = bbox1[0] + bbox1[2] / 2
+            center1_y = bbox1[1] + bbox1[3] / 2
+        else:
+            center1_x = bbox1["x"] + bbox1["width"] / 2
+            center1_y = bbox1["y"] + bbox1["height"] / 2
+
+        if isinstance(bbox2, list):
+            center2_x = bbox2[0] + bbox2[2] / 2
+            center2_y = bbox2[1] + bbox2[3] / 2
+        else:
+            center2_x = bbox2["x"] + bbox2["width"] / 2
+            center2_y = bbox2["y"] + bbox2["height"] / 2
+
+        return ((center1_x - center2_x) ** 2 + (center1_y - center2_y) ** 2) ** 0.5
+    
+    def _is_near(self, bbox1: Dict, bbox2: Dict, threshold: float = 150) -> bool:
+        """Check if bboxes are within threshold pixels."""
+        return self._calculate_distance(bbox1, bbox2) < threshold
+    
+    def _run(self, detections_json: str) -> str:
+        """Analyze spatial relationships."""
+        try:
+            data = json.loads(detections_json)
+            faces = data.get("faces", [])
+            texts = data.get("texts", [])
+            objects = data.get("objects", [])
+
+            escalations = []
+
+            # Rule 1: Face near PII text (identity linkage)
+            for face in faces:
+                for text in texts:
+                    if self._is_near(face["bbox"], text["bbox"], threshold = 200):
+                        if text.get("attributes", {}).get("is_pii", False):
+                            escalations.append({
+                                "elements": [face["id"], text["id"]],
+                                "escalation_amount": 2,
+                                "reason": f"Identity linkage: face near {text.get('text_type', 'PII')}",
+                                "relationship_type": "identity_linkage"
+                            })
+
+            # Rule 2: Face near screen
+            for face in faces:
+                for obj in objects:
+                    if obj.get("contains_screen", False):
+                        if self._is_near(face["bbox"], obj["bbox"], threshold = 300):
+                            escalations.append({
+                                "elements": [face["id"], obj["id"]],
+                                "escalation_amount": 1,
+                                "reason": "Face near screen with visible content",
+                                "relationship_type": "content_association"
+                            })
+            
+            # Rule 3: Multiple small faces (group bystanders)
+            small_faces = [f for f in faces if f.get("size") == "small"]
+            if len(faces) >= 3 and len(small_faces) >= 2:
+                for face in small_faces:
+                    escalations.append({
+                        "elements": [face["id"]],
+                        "escalation_amount": 1,
+                        "reason": "Background face in group photo",
+                        "relationship_type": "group_bystander"
+                    })
+            
+            return json.dumps({
+                "escalations": escalations,
+                "total_escalations": len(escalations)
+            })
+        
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+                "escalations": [],
+                "total_escalations": 0
+            })
+        
+class ConsentInferenceTool(BaseTool):
+    """Infers consent likelihood from visual cues."""
+    name: str = "infer_consent_likelihood"
+    description: str = (
+        "Infers consent status using size, position, and context. "
+        "Use this tool when you need to estimate consent likelihood for detected faces based on visual cues without face recognition."
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def _get_relative_position(self, bbox: Dict, image_width: int, image_height: int) -> str:
+        """Classify face position."""
+        if isinstance(bbox, list):
+            center_x = (bbox[0] + bbox[2] / 2) / image_width
+            center_y = (bbox[1] + bbox[3] / 2) / image_height
+
+        else:
+            center_x = (bbox["x"] + bbox["width"] / 2) / image_width
+            center_y = (bbox["y"] + bbox["height"] / 2) / image_height
+
+        if 0.3 <= center_x <= 0.7 and 0.3 <= center_y <= 0.7:
+            return "center"
+        elif center_x < 0.2 or center_x > 0.8 or center_y < 0.2 or center_y > 0.8:
+            return "edge"
+        else:
+            return "intermediate"
+    
+    def _run(self, face_context_json: str) -> str:
+        """Infer consent likelihood"""
+        try:
+            data = json.loads(face_context_json)
+            face = data.get("face", {})
+            image_context = data.get("image_context", {})
+
+            # Use pre-classified size from FaceDetectionTool
+            size = face.get("size", "medium")
+            bbox = face.get("bbox", [0, 0, 0, 0])
+
+            image_width = image_context.get("width", 1920)
+            image_height = image_context.get("height", 1080)
+            total_faces = image_context.get("total_faces", 1)
+
+            consent_score = 0.0
+            reasoning_parts = []
+
+            # Size (from FaceDetectionTool)
+            if size == "large":
+                consent_score += 0.3
+                reasoning_parts.append("large face (likely subject)")
+            elif size == "small":
+                consent_score -= 0.2
+                reasoning_parts.append("small face (likely background)")
+            
+            # Position
+            position = self._get_relative_position(bbox, image_width, image_height)
+            if position == "center":
+                consent_score += 0.3
+                reasoning_parts.append("centered")
+            elif position == "edge":
+                consent_score -= 0.2
+                reasoning_parts.append("edge position")
+            
+            # Count
+            if total_faces == 1:
+                consent_score += 0.2
+                reasoning_parts.append("only face")
+            elif total_faces > 3:
+                consent_score -= 0.1
+                reasoning_parts.append("group photo")
+            
+            # Map to consent status
+            if consent_score > 0.5:
+                status = ConsentStatus.ASSUMED.value
+                confidence = min(consent_score, 0.85)
+            elif consent_score > 0:
+                status = ConsentStatus.UNCLEAR.value
+                confidence = 0.5
+            else:
+                status = ConsentStatus.NONE.value
+                confidence = min(abs(consent_score) + 0.3, 0.8)
+            
+            return json.dumps({
+                "face_id": face.get("id", "unknown"),
+                "inferred_consent_status": status,
+                "consent_confidence": confidence,
+                "consent_score": consent_score,
+                "reasoning": " | ".join(reasoning_parts)
+            })
+        
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+                "face_id": "unknown",
+                "inferred_consent_status": ConsentStatus.UNCLEAR.value,
+                "consent_confidence": 0.5
+            })
+
+class RiskEscalationTool(BaseTool):
+    """Applies risk escalations from spatial analysis"""
+    name: str = "apply_risk_escalations"
+    description: str = (
+        "Applies risk escalations based on spatial relationships. "
+        "Use this tool after spatial analysis to escalate risk severity for elements with compounded privacy risks."
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    def _escalate_severity(self, current_severity: str, escalation_amount: int) -> str:
+        """Escalate risk severity."""
+        risk_order = ["low", "medium", "high", "critical"]
+        try:
+            current_idx = risk_order.index(current_severity)
+        except ValueError:
+            current_idx = 1
+        
+        new_idx = min(current_idx + escalation_amount, len(risk_order) - 1)
+        return risk_order[new_idx]
+
+    def _run(self, escalation_data_json: str) -> str:
+        """Apply escalations."""
+        try:
+            data = json.loads(escalation_data_json)
+            
+            assessments = data.get("assessments", [])
+            escalations = data.get("escalations", [])
+
+            assessment_map = {a["detection_id"]: a for a in assessments}
+            escalations_applied = 0
+
+            for escalation in escalations:
+                elements = escalation.get("elements", [])
+                escalation_amount = escalation.get("escalation_amount", 1)
+                reason = escalation.get("reason", "Contextual escalation")
+
+                for element_id in elements:
+                    if element_id in assessment_map:
+                        assessment = assessment_map[element_id]
+                        old_severity = assessment.get("severity", "medium")
+                        new_severity = self._escalate_severity(old_severity, escalation_amount)
+
+                        if new_severity != old_severity:
+                            assessment["severity"] = new_severity
+                            assessment["factors"]["final_risk"] = new_severity
+                            assessment["factors"]["escalation_reason"] = reason
+                            assessment["requires_protection"] = new_severity in ["high", "critical"]
+                            escalations_applied += 1
+            
+            return json.dumps({
+                "assessments": list(assessment_map.values()),
+                "escalations_applied": escalations_applied
+            })
+        
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+                "assessments": data.get("assessments", []),
+                "escalations_applied": 0
+            })
+
+# Validation and Filtering Tools
+class FalsePositiveFilterTool(BaseTool):
+    """Filters false positive detections."""
+    name: str = "filter_false_positives"
+    description: str = (
+        "Filters false positives to reduce noise. "
+        "Use this tool to remove low-confidence detections and tiny elements that are likely false positives."
+    )
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+    
+    def _run(self, assessments_json: str) -> str:
+        """Filter false positives"""
+        try:
+            data = json.loads(assessments_json)
+            assessments = data.get("assessments", [])
+
+            filtered = []
+            filter_stats = {
+                "low_confidence": 0,
+                "too_small": 0,
+                "already_filtered": 0
+            }
+
+            for assessment in assessments:
+                if assessment.get("filtered", False):
+                    filter_stats["already_filtered"] += 1
+                    continue
+
+                # Get confidence from factors based on element type
+                factors = assessment.get("factors", {})
+                element_type = assessment.get("element_type", "")
+
+                if element_type == "text":
+                    confidence = factors.get("ocr_confidence", 1.0)
+                elif element_type in ["face", "object"]:
+                    confidence = factors.get("detection_confidence", 1.0)
+                else:
+                    confidence = 1.0
+
+                # Filter low confidence
+                if element_type == "text" and confidence < 0.3:
+                    filter_stats["low_confidence"] += 1
+                    continue
+                elif element_type == "face" and confidence < 0.90:
+                    filter_stats["low_confidence"] += 1
+                    continue
+            
+                # Filter tiny elements
+                bbox = assessment.get("bbox", [0, 0, 0, 0])
+                width = bbox[2] if isinstance(bbox, list) else bbox.get("width", 0)
+                height = bbox[3] if isinstance(bbox, list) else bbox.get("height", 0)
+
+                if width < 20 or height < 20:
+                    filter_stats["too_small"] += 1
+                    continue
+
+                filtered.append(assessment)
+
+            return json.dumps({
+                "assessments": filtered,
+                "original_count": len(assessments),
+                "filtered_count": len(filtered),
+                "removed_count": len(assessments) - len(filtered),
+                "filter_stats": filter_stats
+            })
+        
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+                "assessments": data.get("assessments", []),
+                "original_count": len(data.get("assessments", [])),
+                "filtered_count": len(data.get("assessments", []))
+            })
+
+class ConsistencyValidationTool(BaseTool):
+    """Validate consistency across assessments."""
+    name: str = "validate_consistency"
+    description: str = (
+        "Validates logical consistency across risk assessments. "
+        "Use this tool to ensure severity levels match protection requirements (e.g., critical/high must require protection)."
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def _run(self, assessments_json: str) -> str:
+        """Validate consistency"""
+        try:
+            data = json.loads(assessments_json)
+            assessments = data.get("assessments", [])
+
+            corrections = 0
+            for assessment in assessments:
+                severity = assessment.get("severity", "low")
+                requires_protection = assessment.get("requires_protection", False)
+
+                # Critical/High must require protection
+                if severity in ["critical", "high"] and not requires_protection:
+                    assessment["requires_protection"] = True
+                    corrections += 1
+
+                # Low shouldn't require protection
+                if severity == "low" and requires_protection:
+                    assessment["requires_protection"] = False
+                    corrections += 1
+                
+            return json.dumps({
+                "assessments": assessments,
+                "validated_count": len(assessments),
+                "corrections_made": corrections
+            })
+        
+        except Exception as e:
+            return json.dumps({
+                "error": str(e),
+                "assessments": data.get("assessments", []),
+                "validated_count": 0,
+                "corrections_made": 0
+            })
+
+
+
+            
+
+            
+        
+
+
+
+
+
