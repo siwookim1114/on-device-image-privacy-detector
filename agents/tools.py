@@ -570,20 +570,20 @@ class FaceRiskAssessmentTool(BaseTool):
     privacy_profile: PrivacyProfile = None
 
     # Risk escalation mappings
-    SENSITIVITY_TO_RISK = {
+    SENSITIVITY_TO_RISK: ClassVar[Dict] = {
         "critical": RiskLevel.CRITICAL,     
         "high": RiskLevel.HIGH,             
         "medium": RiskLevel.MEDIUM,         
         "low": RiskLevel.LOW        
     }
 
-    SIZE_ESCALATION = {
+    SIZE_ESCALATION: ClassVar[Dict] = {
         "large": 2,                         # Large faces are highly identifiable
         "medium": 1,                        # Medium faces moderately identifiable
         "small": 0                          # Small faces less identifiable
     }
 
-    CLARITY_ESCALATION = {
+    CLARITY_ESCALATION: ClassVar[Dict] = {
         "high": 1,                          # Clear faces are easily identifiable
         "medium": 0,                        # Normal clarity
         "low": -1                           # Blurry/obscured faces harder to identify
@@ -673,8 +673,13 @@ class FaceRiskAssessmentTool(BaseTool):
 
             # Extract face properties
             face_id = data.get("id", "unknown")
-            bbox_list = data.get("bbox", [0, 0, 0, 0])
-            bbox = BoundingBox(x=bbox_list[0], y=bbox_list[1], width=bbox_list[2], height=bbox_list[3])
+            bbox_raw = data.get("bbox", [0, 0, 0, 0])
+            if isinstance(bbox_raw, dict):
+                bbox = BoundingBox(**bbox_raw)
+            elif isinstance(bbox_raw, list):
+                bbox = BoundingBox(x=bbox_raw[0], y=bbox_raw[1], width=bbox_raw[2], height=bbox_raw[3])
+            else:
+                bbox = BoundingBox(x=0, y=0, width=0, height=0)
 
             size = data.get("size", "medium")
             confidence = data.get("confidence", 0.0)
@@ -792,7 +797,7 @@ class TextRiskAssessmentTool(BaseTool):
     #     }
     # }
 
-    RISK_TYPES = {
+    RISK_TYPES: ClassVar[Dict] = {
         "critical_types": {
             "ssn", "social_security", "credit_card", "bank_account",
             "password", "pin", "routing_number", "cvv", "api_key", "secret"
@@ -808,7 +813,7 @@ class TextRiskAssessmentTool(BaseTool):
     }
 
     # Sensitivity mapping
-    TYPE_TO_SENSITIVITY = {
+    TYPE_TO_SENSITIVITY: ClassVar[Dict] = {
         "ssn": "personal_numbers",
         "credit_card": "financial_data",
         "bank_account": "financial_data",
@@ -881,8 +886,13 @@ class TextRiskAssessmentTool(BaseTool):
             # Extract data
             text_id = data.get("id", "unknown")
             text_content = data.get("text_content", "")
-            bbox_list = data.get("bbox", [0, 0, 0, 0])
-            bbox = BoundingBox(x = bbox_list[0], y = bbox_list[1], width = bbox_list[2], height = bbox_list[3])
+            bbox_raw = data.get("bbox", [0, 0, 0, 0])
+            if isinstance(bbox_raw, dict):
+                bbox = BoundingBox(**bbox_raw)
+            elif isinstance(bbox_raw, list):
+                bbox = BoundingBox(x=bbox_raw[0], y=bbox_raw[1], width=bbox_raw[2], height=bbox_raw[3])
+            else:
+                bbox = BoundingBox(x=0, y=0, width=0, height=0)
             confidence = data.get("confidence", 0)
             text_type = data.get("text_type", "general_text")
             is_pii = data.get("attributes", {}).get("is_pii", False)
@@ -1006,8 +1016,13 @@ class ObjectRiskAssessmentTool(BaseTool):
             # Extract pre-classified data from ObjectDetectionTool
             obj_id = data.get("id", "unknown")
             obj_label = data.get("object_class", "unknown")
-            bbox_list = data.get("bbox", [0, 0, 0, 0])
-            bbox = BoundingBox(x = bbox_list[0], y = bbox_list[1], width = bbox_list[2], height = bbox_list[3])
+            bbox_raw = data.get("bbox", [0, 0, 0, 0])
+            if isinstance(bbox_raw, dict):
+                bbox = BoundingBox(**bbox_raw)
+            elif isinstance(bbox_raw, list):
+                bbox = BoundingBox(x=bbox_raw[0], y=bbox_raw[1], width=bbox_raw[2], height=bbox_raw[3])
+            else:
+                bbox = BoundingBox(x=0, y=0, width=0, height=0)
             confidence = data.get("confidence", 0.0)
 
             # Use existing classification

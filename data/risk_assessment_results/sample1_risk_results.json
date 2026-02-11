@@ -1,0 +1,263 @@
+{
+  "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample1.png",
+  "overall_risk_level": "critical",
+  "processing_time_ms": 1.0402202606201172,
+  "total_assessments": 13,
+  "confirmed_risks": 7,
+  "faces_pending_identity": 0,
+  "detection_summary": {
+    "faces": 1,
+    "text_regions": 7,
+    "objects": 5,
+    "total": 13
+  },
+  "assessments": [
+    {
+      "detection_id": "8fd3b0c3-356b-4847-b2fa-dfe1cd55ab0e",
+      "element_type": "face",
+      "element_description": "Face (medium, high clarity)",
+      "risk_type": "identity_exposure",
+      "severity": "critical",
+      "color_code": "#FF0000",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        410,
+        172,
+        242,
+        305
+      ],
+      "requires_protection": true,
+      "consent_status": "none",
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "bystander_faces"
+    },
+    {
+      "detection_id": "bbea877e-950e-4b79-a962-4c50e4ee814e",
+      "element_type": "text",
+      "element_description": "Text: Social Security",
+      "risk_type": "information_disclosure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        222,
+        1166,
+        257,
+        45
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "high"
+    },
+    {
+      "detection_id": "fd4dd489-1585-43a8-a77c-b6c626cd996e",
+      "element_type": "text",
+      "element_description": "Text: #:",
+      "risk_type": "information_disclosure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        486,
+        1176,
+        44,
+        26
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "high"
+    },
+    {
+      "detection_id": "f3259b63-5f0e-45c3-a1a8-c72a56a23bcd",
+      "element_type": "text",
+      "element_description": "Text: 238-49-6521",
+      "risk_type": "information_disclosure",
+      "severity": "critical",
+      "color_code": "#FF0000",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        211,
+        1210,
+        283,
+        44
+      ],
+      "requires_protection": true,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "critical"
+    },
+    {
+      "detection_id": "f8da8534-7ef9-4d3c-ab4f-5e7abe6fa856",
+      "element_type": "text",
+      "element_description": "Text: Bank Account: 8765 4321 0987",
+      "risk_type": "information_disclosure",
+      "severity": "critical",
+      "color_code": "#FF0000",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        222,
+        1291,
+        515,
+        60
+      ],
+      "requires_protection": true,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "critical"
+    },
+    {
+      "detection_id": "4aca672d-854e-4c05-8171-b351d2da4347",
+      "element_type": "text",
+      "element_description": "Text: PIN: 4821",
+      "risk_type": "information_disclosure",
+      "severity": "critical",
+      "color_code": "#FF0000",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        229,
+        1356,
+        216,
+        60
+      ],
+      "requires_protection": true,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "critical"
+    },
+    {
+      "detection_id": "a4a4c601-a5e4-4ddf-915c-59fab61912c4",
+      "element_type": "text",
+      "element_description": "Text: Password:",
+      "risk_type": "information_disclosure",
+      "severity": "critical",
+      "color_code": "#FF0000",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        759,
+        1143,
+        168,
+        55
+      ],
+      "requires_protection": true,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "critical"
+    },
+    {
+      "detection_id": "088ce547-d819-495f-b90c-d8ccc3a2380a",
+      "element_type": "text",
+      "element_description": "Text: Magicl231",
+      "risk_type": "information_disclosure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        747,
+        1177,
+        191,
+        71
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "high"
+    },
+    {
+      "detection_id": "a2e3bc67-a410-4371-a30f-3d962a1d5055",
+      "element_type": "object",
+      "element_description": "Object: laptop",
+      "risk_type": "information_disclosure",
+      "severity": "high",
+      "color_code": "#FF6600",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        0,
+        727,
+        630,
+        409
+      ],
+      "requires_protection": true,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "high"
+    },
+    {
+      "detection_id": "5418e5f0-39b2-4ba1-a8ac-367043c9a00e",
+      "element_type": "object",
+      "element_description": "Object: cell phone",
+      "risk_type": "information_disclosure",
+      "severity": "high",
+      "color_code": "#FF6600",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        0,
+        1100,
+        143,
+        108
+      ],
+      "requires_protection": true,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "high"
+    },
+    {
+      "detection_id": "890a4b1f-e668-4831-8156-81c1d322c7b0",
+      "element_type": "object",
+      "element_description": "Object: book",
+      "risk_type": "context_exposure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        75,
+        1126,
+        807,
+        359
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "medium"
+    },
+    {
+      "detection_id": "d6decc1d-c1e4-4fc8-aa8a-8220fd0c3796",
+      "element_type": "object",
+      "element_description": "Object: book",
+      "risk_type": "context_exposure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        110,
+        1248,
+        765,
+        236
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "medium"
+    },
+    {
+      "detection_id": "e5106f57-b99d-42bc-ae67-6389c706f5e3",
+      "element_type": "object",
+      "element_description": "Object: book",
+      "risk_type": "context_exposure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        839,
+        24,
+        46,
+        138
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "medium"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample2.png",
+  "overall_risk_level": "critical",
+  "processing_time_ms": 0.5750656127929688,
+  "total_assessments": 2,
+  "confirmed_risks": 2,
+  "faces_pending_identity": 0,
+  "detection_summary": {
+    "faces": 1,
+    "text_regions": 0,
+    "objects": 1,
+    "total": 2
+  },
+  "assessments": [
+    {
+      "detection_id": "17c5ce4c-56c0-45a9-bfb4-83a1026dc6ec",
+      "element_type": "face",
+      "element_description": "Face (medium, high clarity)",
+      "risk_type": "identity_exposure",
+      "severity": "critical",
+      "color_code": "#FF0000",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        349,
+        98,
+        110,
+        136
+      ],
+      "requires_protection": true,
+      "consent_status": "none",
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "bystander_faces"
+    },
+    {
+      "detection_id": "b2ca6b56-e4de-495f-8673-b2d54f080f50",
+      "element_type": "object",
+      "element_description": "Object: laptop",
+      "risk_type": "information_disclosure",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
+      "bbox": [
+        81,
+        314,
+        427,
+        172
+      ],
+      "requires_protection": true,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "high"
+    }
+  ]
+}

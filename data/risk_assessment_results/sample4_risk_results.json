@@ -1,0 +1,149 @@
+{
+  "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample4.jpeg",
+  "overall_risk_level": "critical",
+  "processing_time_ms": 0.9737014770507812,
+  "total_assessments": 7,
+  "confirmed_risks": 4,
+  "faces_pending_identity": 0,
+  "detection_summary": {
+    "faces": 1,
+    "text_regions": 0,
+    "objects": 6,
+    "total": 7
+  },
+  "assessments": [
+    {
+      "detection_id": "49e67b3c-1c8a-40ff-b397-ca776f414243",
+      "element_type": "face",
+      "element_description": "Face (medium, high clarity)",
+      "risk_type": "identity_exposure",
+      "severity": "critical",
+      "color_code": "#FF0000",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        453,
+        442,
+        246,
+        381
+      ],
+      "requires_protection": true,
+      "consent_status": "none",
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "bystander_faces"
+    },
+    {
+      "detection_id": "63ea1918-e8c7-47ec-9bbe-60db230c7c61",
+      "element_type": "object",
+      "element_description": "Object: tv",
+      "risk_type": "information_disclosure",
+      "severity": "high",
+      "color_code": "#FF6600",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        0,
+        523,
+        197,
+        306
+      ],
+      "requires_protection": true,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "high"
+    },
+    {
+      "detection_id": "742c4186-a739-4f3c-ac44-c8fe94dfe177",
+      "element_type": "object",
+      "element_description": "Object: mouse",
+      "risk_type": "context_exposure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        83,
+        995,
+        115,
+        73
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "medium"
+    },
+    {
+      "detection_id": "eec3d756-97ec-4ed8-a6d4-80f7a0b9a1fd",
+      "element_type": "object",
+      "element_description": "Object: laptop",
+      "risk_type": "information_disclosure",
+      "severity": "high",
+      "color_code": "#FF6600",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        0,
+        922,
+        348,
+        369
+      ],
+      "requires_protection": true,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "high"
+    },
+    {
+      "detection_id": "bb179b73-5df3-4e23-81cd-3176a51b135e",
+      "element_type": "object",
+      "element_description": "Object: tv",
+      "risk_type": "information_disclosure",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
+      "bbox": [
+        191,
+        491,
+        212,
+        128
+      ],
+      "requires_protection": true,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "high"
+    },
+    {
+      "detection_id": "b5612d33-7889-410f-8315-cfa6a31b14d0",
+      "element_type": "object",
+      "element_description": "Object: mouse",
+      "risk_type": "context_exposure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        202,
+        995,
+        115,
+        63
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "medium"
+    },
+    {
+      "detection_id": "5d71d106-f0f8-4ebe-b9ea-c4c660f9493d",
+      "element_type": "object",
+      "element_description": "Object: keyboard",
+      "risk_type": "context_exposure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment",
+      "bbox": [
+        30,
+        1097,
+        202,
+        193
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "medium"
+    }
+  ]
+}
