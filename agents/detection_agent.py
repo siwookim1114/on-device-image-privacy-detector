@@ -178,7 +178,8 @@ class DetectionAgent:
                         attributes = {
                             "is_sensitive": text_data.get("is_sensitive", False),
                             "is_pii": text_data.get("is_pii", False),
-                            "is_critical": text_data.get("is_critical", False)
+                            "is_critical": text_data.get("is_critical", False),
+                            "is_label_only": text_data.get("is_label_only", False)
                         }
                     )
                     detections.text_regions.append(text)

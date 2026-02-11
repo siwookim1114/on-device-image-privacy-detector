@@ -1,7 +1,7 @@
 {
   "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample4.jpeg",
   "overall_risk_level": "critical",
-  "processing_time_ms": 0.9737014770507812,
+  "processing_time_ms": 0.7867813110351562,
   "total_assessments": 7,
   "confirmed_risks": 4,
   "faces_pending_identity": 0,
@@ -13,7 +13,7 @@
   },
   "assessments": [
     {
-      "detection_id": "49e67b3c-1c8a-40ff-b397-ca776f414243",
+      "detection_id": "370f54f7-2dff-46a5-b985-e60a2327f218",
       "element_type": "face",
       "element_description": "Face (medium, high clarity)",
       "risk_type": "identity_exposure",
@@ -32,7 +32,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "63ea1918-e8c7-47ec-9bbe-60db230c7c61",
+      "detection_id": "3239867d-93ff-4914-bda6-55ece6341823",
       "element_type": "object",
       "element_description": "Object: tv",
       "risk_type": "information_disclosure",
@@ -51,7 +51,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "742c4186-a739-4f3c-ac44-c8fe94dfe177",
+      "detection_id": "c481c28a-506b-4333-aad7-8ce52d1b2503",
       "element_type": "object",
       "element_description": "Object: mouse",
       "risk_type": "context_exposure",
@@ -70,7 +70,7 @@
       "user_sensitivity_applied": "medium"
     },
     {
-      "detection_id": "eec3d756-97ec-4ed8-a6d4-80f7a0b9a1fd",
+      "detection_id": "636c2e57-4917-402d-881d-9df35513c521",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
@@ -89,7 +89,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "bb179b73-5df3-4e23-81cd-3176a51b135e",
+      "detection_id": "a3ff365e-a81f-461a-88c9-2174f9cdc031",
       "element_type": "object",
       "element_description": "Object: tv",
       "risk_type": "information_disclosure",
@@ -108,7 +108,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "b5612d33-7889-410f-8315-cfa6a31b14d0",
+      "detection_id": "4d7280a0-8001-4284-8b22-f62cf6e04949",
       "element_type": "object",
       "element_description": "Object: mouse",
       "risk_type": "context_exposure",
@@ -127,7 +127,7 @@
       "user_sensitivity_applied": "medium"
     },
     {
-      "detection_id": "5d71d106-f0f8-4ebe-b9ea-c4c660f9493d",
+      "detection_id": "1313621c-57d8-4f20-9e27-8fb1af7d2b16",
       "element_type": "object",
       "element_description": "Object: keyboard",
       "risk_type": "context_exposure",

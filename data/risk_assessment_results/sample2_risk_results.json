@@ -1,7 +1,7 @@
 {
   "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample2.png",
   "overall_risk_level": "critical",
-  "processing_time_ms": 0.5750656127929688,
+  "processing_time_ms": 0.576019287109375,
   "total_assessments": 2,
   "confirmed_risks": 2,
   "faces_pending_identity": 0,
@@ -13,7 +13,7 @@
   },
   "assessments": [
     {
-      "detection_id": "17c5ce4c-56c0-45a9-bfb4-83a1026dc6ec",
+      "detection_id": "a1cacdfc-d86c-4977-b2fa-9994f0a25aa9",
       "element_type": "face",
       "element_description": "Face (medium, high clarity)",
       "risk_type": "identity_exposure",
@@ -32,7 +32,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "b2ca6b56-e4de-495f-8673-b2d54f080f50",
+      "detection_id": "7228452e-296b-4cc4-92f3-f326d4759cfe",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",

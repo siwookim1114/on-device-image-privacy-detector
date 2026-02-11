@@ -267,45 +267,103 @@ class TextDetectionTool(BaseTool):
         """
         Classify text for privacy risk assessment.
 
+        Distinguishes between:
+        - Actual sensitive values (SSN numbers, passwords, etc.) → CRITICAL/HIGH
+        - Labels only ("Password:", "Bank Account:") → LOW (context indicator, not actual data)
+
         Returns:
-            Dict with type, is_sensitive, is_pii, is_critical flags
+            Dict with type, is_sensitive, is_pii, is_critical, is_label_only flags
         """
         text_clean = text.strip()
 
-        # ----- CRITICAL: Social Security Number -----
+        # ----- CRITICAL: Social Security Number (actual digits) -----
         if re.search(r'\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b', text_clean):
             return {
                 "type": "ssn",
                 "is_sensitive": True,
                 "is_pii": True,
-                "is_critical": True
+                "is_critical": True,
+                "is_label_only": False
             }
 
-        # ----- CRITICAL: Credit Card Number -----
+        # ----- CRITICAL: Credit Card Number (actual digits) -----
         if re.search(r'\b(?:\d{4}[-.\s]?){3}\d{4}\b', text_clean):
             return {
                 "type": "credit_card",
                 "is_sensitive": True,
                 "is_pii": True,
-                "is_critical": True
+                "is_critical": True,
+                "is_label_only": False
             }
 
-        # ----- CRITICAL: Password/PIN Labels -----
-        if re.search(r'\b(password|pwd|pin|passcode)\s*[:=]?\s*\S+', text_clean, re.IGNORECASE):
-            return {
-                "type": "password",
-                "is_sensitive": True,
-                "is_pii": True,
-                "is_critical": True
-            }
+        # ----- Password/PIN: Separate label vs value -----
+        pw_match = re.search(r'\b(password|pwd|pin|passcode)\b', text_clean, re.IGNORECASE)
+        if pw_match:
+            # Extract everything after the keyword
+            after_keyword = text_clean[pw_match.end():].strip()
+            # Remove separator (colon, equals)
+            after_keyword = re.sub(r'^[:=]\s*', '', after_keyword).strip()
 
-        # ----- CRITICAL: Bank Account -----
-        if re.search(r'\b(bank|account|routing|iban)\s*[:=]?\s*\d+', text_clean, re.IGNORECASE):
+            if after_keyword:
+                # Has actual value content (e.g., "PIN: 4821", "password=Secret123")
+                return {
+                    "type": "password",
+                    "is_sensitive": True,
+                    "is_pii": True,
+                    "is_critical": True,
+                    "is_label_only": False
+                }
+            else:
+                # Label only (e.g., "Password:", "PIN:")
+                return {
+                    "type": "password_label",
+                    "is_sensitive": True,
+                    "is_pii": False,
+                    "is_critical": False,
+                    "is_label_only": True
+                }
+
+        # ----- Bank/Financial: Composite (keyword + actual numbers) -----
+        # Broad keywords OK here because digits are required
+        if re.search(r'\b(bank|account|routing|iban)\s*[:=]?\s*\d{4,}', text_clean, re.IGNORECASE):
             return {
                 "type": "bank_account",
                 "is_sensitive": True,
                 "is_pii": True,
-                "is_critical": True
+                "is_critical": True,
+                "is_label_only": False
+            }
+
+        # ----- Bank/Financial: Label only (stricter multi-word keywords to avoid false positives) -----
+        bank_label_match = re.search(r'\b(bank\s*account|account\s*number|routing\s*number|iban)\b', text_clean, re.IGNORECASE)
+        if bank_label_match:
+            return {
+                "type": "bank_label",
+                "is_sensitive": True,
+                "is_pii": False,
+                "is_critical": False,
+                "is_label_only": True
+            }
+
+        # ----- SSN/Credit Card Label (keyword without actual numbers) -----
+        ssn_label_match = re.search(r'\b(social\s*security|ssn)\b', text_clean, re.IGNORECASE)
+        if ssn_label_match:
+            return {
+                "type": "ssn_label",
+                "is_sensitive": True,
+                "is_pii": False,
+                "is_critical": False,
+                "is_label_only": True
+            }
+
+        credit_label_match = re.search(r'\b(credit\s*card)\b', text_clean, re.IGNORECASE)
+        if credit_label_match:
+            return {
+                "type": "credit_card_label",
+                "is_sensitive": True,
+                "is_pii": False,
+                "is_critical": False,
+                "is_label_only": True
             }
 
         # ----- PII: Phone Number -----
@@ -319,7 +377,8 @@ class TextDetectionTool(BaseTool):
                     "type": "phone_number",
                     "is_sensitive": True,
                     "is_pii": True,
-                    "is_critical": False
+                    "is_critical": False,
+                    "is_label_only": False
                 }
 
         # ----- PII: Email Address -----
@@ -328,7 +387,8 @@ class TextDetectionTool(BaseTool):
                 "type": "email",
                 "is_sensitive": True,
                 "is_pii": True,
-                "is_critical": False
+                "is_critical": False,
+                "is_label_only": False
             }
 
         # ----- PII: Physical Address -----
@@ -343,7 +403,8 @@ class TextDetectionTool(BaseTool):
                 "type": "address",
                 "is_sensitive": True,
                 "is_pii": True,
-                "is_critical": False
+                "is_critical": False,
+                "is_label_only": False
             }
 
         # ----- Default: General Text -----
@@ -351,8 +412,56 @@ class TextDetectionTool(BaseTool):
             "type": "general_text",
             "is_sensitive": False,
             "is_pii": False,
-            "is_critical": False
+            "is_critical": False,
+            "is_label_only": False
         }
+
+    def _bbox_distance(self, bbox1: List, bbox2: List) -> float:
+        """Calculate Euclidean distance between two bbox centers. Bboxes are [x, y, w, h]."""
+        c1x = bbox1[0] + bbox1[2] / 2
+        c1y = bbox1[1] + bbox1[3] / 2
+        c2x = bbox2[0] + bbox2[2] / 2
+        c2y = bbox2[1] + bbox2[3] / 2
+        return ((c1x - c2x) ** 2 + (c1y - c2y) ** 2) ** 0.5
+
+    def _propagate_labels_to_values(self, texts: List[Dict]) -> None:
+        """
+        Second pass: Propagate label classifications to nearby unclassified values.
+
+        When OCR splits "Password:" and "Magic123!" into separate blocks,
+        the label gets classified but the value doesn't. This pass links them
+        by spatial proximity so the value inherits the label's risk type.
+        """
+        # Map label types to the value classification they propagate
+        LABEL_TO_VALUE = {
+            "password_label": ("password", True),       # (value_type, is_critical)
+            "bank_label": ("bank_account", True),
+            "ssn_label": ("ssn", True),
+            "credit_card_label": ("credit_card", True),
+        }
+
+        labels = [t for t in texts if t.get("is_label_only", False)]
+        if not labels:
+            return
+
+        for label in labels:
+            propagation = LABEL_TO_VALUE.get(label["text_type"])
+            if not propagation:
+                continue
+
+            value_type, is_critical = propagation
+
+            for text in texts:
+                # Only propagate to unclassified general text that isn't a label
+                if text["text_type"] != "general_text" or text.get("is_label_only", False):
+                    continue
+
+                # Check spatial proximity (threshold: 200 pixels center-to-center)
+                if self._bbox_distance(label["bbox"], text["bbox"]) < 200:
+                    text["text_type"] = value_type
+                    text["is_pii"] = True
+                    text["is_critical"] = is_critical
+                    text["is_sensitive"] = True
 
     def _run(self, image_path: str) -> str:
         """Run text detection on an image"""
@@ -379,7 +488,7 @@ class TextDetectionTool(BaseTool):
 
                 texts.append({
                     "id": f"text_{idx}",
-                    "text_content": text,  # Changed from "text" to "text_content"
+                    "text_content": text,
                     "bbox": [
                         int(min(x_coords)),
                         int(min(y_coords)),
@@ -390,8 +499,12 @@ class TextDetectionTool(BaseTool):
                     "text_type": classification["type"],
                     "is_sensitive": classification["is_sensitive"],
                     "is_pii": classification["is_pii"],
-                    "is_critical": classification["is_critical"]
+                    "is_critical": classification["is_critical"],
+                    "is_label_only": classification["is_label_only"]
                 })
+
+            # Second pass: propagate label classifications to nearby unclassified values
+            self._propagate_labels_to_values(texts)
 
             return json.dumps({
                 "texts": texts,
@@ -781,21 +894,6 @@ class TextRiskAssessmentTool(BaseTool):
     )
     config: Any = None
     privacy_profile: PrivacyProfile = None
-
-    # RISK_PATTERNS = {
-    #     "critical_patterns": {
-    #         "ssn": r'\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b',
-    #         "credit_card": r'\b(?:\d{4}[-.\s]?){3}\d{4}\b',
-    #         "bank_account": r'\b\d{10,17}\b',
-    #         "routing_number": r'\b\d{9}\b',
-    #         "password": r'\b(password|pwd|pass|pin)\s*[:=]\s*\S+',
-    #     },
-    #     "high_patterns": {
-    #         "phone": r'\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
-    #         "email": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
-    #         "address": r'\b\d+\s+[\w\s]+(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd)\b',
-    #     }
-    # }
 
     RISK_TYPES: ClassVar[Dict] = {
         "critical_types": {

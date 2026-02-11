@@ -234,7 +234,6 @@ class RiskAssessmentAgent:
             f"7. Validate consistency using validate_consistency\n\n"
             f"When finished, provide a Final Answer summarizing the risk assessment."
         )
-
         try:
             # Run ReAct agent
             print(f"\n{'-'*60}")
@@ -244,9 +243,9 @@ class RiskAssessmentAgent:
             result = self.agent_executor.invoke({
                 "input": task,
                 "detection_summary": detection_summary
-            })
+            })            
 
-            # FIX #4: Extract assessments from intermediate_steps (reliable tool outputs)
+            # Extract assessments from intermediate_steps (reliable tool outputs)
             # instead of parsing the Final Answer (unreliable LLM-generated JSON)
             assessments = self._extract_from_intermediate_steps(result.get("intermediate_steps", []))
 
@@ -285,7 +284,7 @@ class RiskAssessmentAgent:
         text_dicts = [t.model_dump() for t in detections.text_regions]
         object_dicts = [o.model_dump() for o in detections.objects]
 
-        # FIX #1: No leading whitespace in the summary
+        # No leading whitespace in the summary
         summary = (
             f"Image Dimensions: {image_context['width']}x{image_context['height']}\n\n"
             f"Detected Elements:\n"
