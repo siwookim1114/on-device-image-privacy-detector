@@ -399,3 +399,23 @@ class PipelineOutput(BaseModel):
     total_time_ms: float = 0.0
     error_message: Optional[str] = None
 
+# Input Schemas for Phase 2 tools
+class ReclassifyAssessmentInput(BaseModel):
+    """Input schema for reclassify_assessment tool."""
+    index: int = Field(description="Assessment index (0-based) from the assessment list")
+    new_severity: str = Field(description="New severity level: critical, high, medium, or low")
+    visual_reason: str = Field(description="Visual evidence from the image that justifies the change")
+
+
+class SplitPart(BaseModel):
+    """Schema for a single part when splitting an assessment."""
+    element_description: str = Field(description="Description of this part")
+    severity: str = Field(description="Severity: critical, high, medium, or low")
+    requires_protection: bool = Field(description="Whether this part requires protection")
+    visual_reason: str = Field(description="Visual evidence for this classification")
+
+
+class SplitAssessmentInput(BaseModel):
+    """Input schema for split_assessment tool."""
+    index: int = Field(description="Assessment index (0-based) to split")
+    parts: List[SplitPart] = Field(description="List of parts to split into (minimum 2)")

@@ -1,9 +1,9 @@
 {
   "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample2.png",
   "overall_risk_level": "critical",
-  "processing_time_ms": 0.576019287109375,
+  "processing_time_ms": 86384.67383384705,
   "total_assessments": 2,
-  "confirmed_risks": 2,
+  "confirmed_risks": 1,
   "faces_pending_identity": 0,
   "detection_summary": {
     "faces": 1,
@@ -13,7 +13,7 @@
   },
   "assessments": [
     {
-      "detection_id": "a1cacdfc-d86c-4977-b2fa-9994f0a25aa9",
+      "detection_id": "89f40902-38f3-421d-b92d-80f8f4bde7f0",
       "element_type": "face",
       "element_description": "Face (medium, high clarity)",
       "risk_type": "identity_exposure",
@@ -32,20 +32,20 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "7228452e-296b-4cc4-92f3-f326d4759cfe",
+      "detection_id": "113c47ba-18b0-4152-9712-2f618290c950",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
-      "severity": "critical",
-      "color_code": "#FF6600",
-      "reasoning": "Face near screen with visible content",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment -> VLM: Laptop screen shows no visible sensitive text/data; object itself is not a privacy risk without sensitive content.",
       "bbox": [
         81,
         314,
         427,
         172
       ],
-      "requires_protection": true,
+      "requires_protection": false,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"

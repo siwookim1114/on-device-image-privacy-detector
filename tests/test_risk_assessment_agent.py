@@ -103,6 +103,7 @@ def test_risk_assessment_pipeline(
     dataset_path: str,
     reasoning_mode: str = "balanced",
     fallback_only: bool = False,
+    skip_vlm: bool = False,
     save_json: bool = True
 ):
     """
@@ -218,7 +219,12 @@ def test_risk_assessment_pipeline(
                     "total_texts": len(detections.text_regions),
                     "total_objects": len(detections.objects)
                 }
-                risk_result = risk_agent._fallback_with_tools(detections, image_context, start_time)
+                assessments = risk_agent._tool_based_assessment(detections, image_context)
+                risk_result = risk_agent._build_result(assessments, str(image_path), start_time)
+            elif skip_vlm:
+                # Run full ReAct Phase 1 but skip Phase 2 VLM review
+                print(f"  (Skipping VLM Phase 2 review)")
+                risk_result = risk_agent.run(detections, annotated_image=None)
             else:
                 risk_result = risk_agent.run(detections, annotated_image)
 
@@ -311,6 +317,11 @@ def main():
         help="Skip ReAct agent and test fallback tool-based path only (no LLM needed)"
     )
     parser.add_argument(
+        "--skip-vlm",
+        action="store_true",
+        help="Run Phase 1 (ReAct or fallback) but skip Phase 2 VLM visual review"
+    )
+    parser.add_argument(
         "--no-json",
         action="store_true",
         help="Skip saving JSON results"
@@ -322,6 +333,7 @@ def main():
         dataset_path=args.dataset,
         reasoning_mode=args.mode,
         fallback_only=args.fallback_only,
+        skip_vlm=args.skip_vlm,
         save_json=not args.no_json
     )
 

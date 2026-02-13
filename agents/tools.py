@@ -1,7 +1,7 @@
 # Import required utils
 import torch
 from PIL import Image
-from typing import Any, List, Dict, Optional, ClassVar, Set, Tuple, Union
+from typing import Any, List, Dict, Optional, ClassVar, Set, Tuple, Type, Union
 import json
 import numpy as np
 import re
@@ -12,6 +12,7 @@ from facenet_pytorch import InceptionResnetV1  # Face Embeddings (for Future Con
 import easyocr
 from ultralytics import YOLO         # Object Detection (YOLO)
 from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
 from utils.models import (
     RiskLevel,
     RiskType,
@@ -23,9 +24,26 @@ from utils.models import (
     ObjectDetection,
     DetectionResults,
     ConsentStatus,
-    PersonClassification
+    PersonClassification,
+    ReclassifyAssessmentInput,
+    SplitPart,
+    SplitAssessmentInput
 )
 from utils.config import get_risk_color
+
+
+def _parse_tool_input(raw_input) -> dict:
+    """
+    Parse tool input that may be a JSON string (fallback/ReAct) or a dict (tool calling API).
+    Tool calling agents pass args as dicts; direct _run() calls pass JSON strings.
+    """
+    if isinstance(raw_input, dict):
+        return raw_input
+    if isinstance(raw_input, str):
+        return json.loads(raw_input)
+    return json.loads(str(raw_input))
+
+
 ## Detection Tools for Detection Agent
 
 class FaceDetectionTool(BaseTool):
@@ -675,9 +693,13 @@ class FaceRiskAssessmentTool(BaseTool):
     """
     name: str = "assess_face_risk"
     description: str = (
-        "Performs comprehensive privacy risk assessment for detected faces using "
-        "multi-factor analysis including size, clarity, position, and user sensitivity. " \
-        "Use this tool when doing risk assessments on detected faces"
+        "Performs comprehensive privacy risk assessment for a single detected face. "
+        "Input: a JSON string of ONE face dict with keys: id, bbox, size, clarity, "
+        "confidence, attributes, image_width, image_height. "
+        "Pass each face from the Face Data array individually. "
+        "Example: {\"id\": \"abc\", \"bbox\": {\"x\":0,\"y\":0,\"width\":100,\"height\":100}, "
+        "\"size\": \"medium\", \"clarity\": \"high\", \"confidence\": 0.99, "
+        "\"image_width\": 1024, \"image_height\": 768}"
     )
     config: Any = None
     privacy_profile: PrivacyProfile = None
@@ -782,7 +804,17 @@ class FaceRiskAssessmentTool(BaseTool):
             JSON with calculated factors 
         """
         try:
-            data = json.loads(face_json)
+            data = _parse_tool_input(face_json)
+
+            # Unwrap if LLM sent wrapped format like {"face_data": [...]} or [...]
+            if "face_data" in data and isinstance(data.get("face_data"), list) and data["face_data"]:
+                wrapper = data
+                data = data["face_data"][0]
+                # Carry over image dimensions from wrapper level
+                data.setdefault("image_width", wrapper.get("image_width", 1920))
+                data.setdefault("image_height", wrapper.get("image_height", 1080))
+            elif isinstance(data, list) and data:
+                data = data[0]
 
             # Extract face properties
             face_id = data.get("id", "unknown")
@@ -888,9 +920,13 @@ class TextRiskAssessmentTool(BaseTool):
     """
     name: str = "assess_text_risk"
     description: str = (
-        "Calculates comprehensive privacy risk factors for detected text using "
-        "pattern matching, PII classification, and sensitivity analysis."
-        "Use this tool when doing risk assessments on detected texts."
+        "Calculates privacy risk for a single detected text region. "
+        "Input: a JSON string of ONE text dict with keys: id, text_content, text_type, "
+        "bbox, confidence, attributes. "
+        "Pass each text from the Text Data array individually. "
+        "Example: {\"id\": \"abc\", \"text_content\": \"Password:\", \"text_type\": \"password_label\", "
+        "\"bbox\": {\"x\":0,\"y\":0,\"width\":100,\"height\":30}, \"confidence\": 0.95, "
+        "\"attributes\": {\"is_pii\": true, \"is_critical\": false}}"
     )
     config: Any = None
     privacy_profile: PrivacyProfile = None
@@ -979,7 +1015,13 @@ class TextRiskAssessmentTool(BaseTool):
             JSON with calculated factors
         """
         try:
-            data = json.loads(text_json)
+            data = _parse_tool_input(text_json)
+
+            # Unwrap if LLM sent wrapped format like {"text_data": [...]} or [...]
+            if "text_data" in data and isinstance(data.get("text_data"), list) and data["text_data"]:
+                data = data["text_data"][0]
+            elif isinstance(data, list) and data:
+                data = data[0]
 
             # Extract data
             text_id = data.get("id", "unknown")
@@ -1044,8 +1086,14 @@ class TextRiskAssessmentTool(BaseTool):
 class ObjectRiskAssessmentTool(BaseTool):
     name: str = "assess_object_risk"
     description: str = (
-        "Calculates privacy risk for pre-classified objects from ObjectDetectionTool. "
-        "Use this tool when doing risk assessments on detected privacy-relevant objects."
+        "Calculates privacy risk for a single detected object. "
+        "Input: a JSON string of ONE object dict with keys: id, object_class, bbox, "
+        "confidence, attributes, contains_screen. "
+        "Pass each object from the Object Data array individually. "
+        "Example: {\"id\": \"abc\", \"object_class\": \"laptop\", "
+        "\"bbox\": {\"x\":0,\"y\":0,\"width\":200,\"height\":150}, \"confidence\": 0.9, "
+        "\"attributes\": {\"is_privacy_relevant\": true, \"risk_category\": \"screen_device\"}, "
+        "\"contains_screen\": true}"
     )
     config: Any = None
     privacy_profile: PrivacyProfile = None
@@ -1109,7 +1157,13 @@ class ObjectRiskAssessmentTool(BaseTool):
             JSON with calculated factors or filtered status
         """
         try:
-            data = json.loads(object_json)
+            data = _parse_tool_input(object_json)
+
+            # Unwrap if LLM sent wrapped format like {"object_data": [...]} or [...]
+            if "object_data" in data and isinstance(data.get("object_data"), list) and data["object_data"]:
+                data = data["object_data"][0]
+            elif isinstance(data, list) and data:
+                data = data[0]
 
             # Extract pre-classified data from ObjectDetectionTool
             obj_id = data.get("id", "unknown")
@@ -1215,7 +1269,7 @@ class SpatialRelationshipTool(BaseTool):
     def _run(self, detections_json: str) -> str:
         """Analyze spatial relationships."""
         try:
-            data = json.loads(detections_json)
+            data = _parse_tool_input(detections_json)
             faces = data.get("faces", [])
             texts = data.get("texts", [])
             objects = data.get("objects", [])
@@ -1300,7 +1354,7 @@ class ConsentInferenceTool(BaseTool):
     def _run(self, face_context_json: str) -> str:
         """Infer consent likelihood"""
         try:
-            data = json.loads(face_context_json)
+            data = _parse_tool_input(face_context_json)
             face = data.get("face", {})
             image_context = data.get("image_context", {})
 
@@ -1392,7 +1446,7 @@ class RiskEscalationTool(BaseTool):
     def _run(self, escalation_data_json: str) -> str:
         """Apply escalations."""
         try:
-            data = json.loads(escalation_data_json)
+            data = _parse_tool_input(escalation_data_json)
             
             assessments = data.get("assessments", [])
             escalations = data.get("escalations", [])
@@ -1444,7 +1498,7 @@ class FalsePositiveFilterTool(BaseTool):
     def _run(self, assessments_json: str) -> str:
         """Filter false positives"""
         try:
-            data = json.loads(assessments_json)
+            data = _parse_tool_input(assessments_json)
             assessments = data.get("assessments", [])
 
             filtered = []
@@ -1519,7 +1573,7 @@ class ConsistencyValidationTool(BaseTool):
     def _run(self, assessments_json: str) -> str:
         """Validate consistency"""
         try:
-            data = json.loads(assessments_json)
+            data = _parse_tool_input(assessments_json)
             assessments = data.get("assessments", [])
 
             corrections = 0
@@ -1552,13 +1606,228 @@ class ConsistencyValidationTool(BaseTool):
             })
 
 
+#  Phase 2: VLM Review Tools
+"""
+Phase 2 tools are used by the VLM agent to review and modify Phase 1 assessments.
+Each tool receives a reference to the shared assessments list and modifies it in-place.
+The agent dynamically decides which tools to call based on visual evidence.
+"""
 
-            
+class ReclassifyAssessmentTool(BaseTool):
+    """Reclassify assessment severity based on visual evidence. Actual modifications in-place."""
+    name: str = "reclassify_assessment"
+    description: str = (
+        "Reclassify the severity of an assessment based on visual evidence. "
+        "Actually changes the severity, color code, and protection status in-place."
+    )
+    args_schema: Type[BaseModel] = ReclassifyAssessmentInput
+    assessments: Any = None
+    config: Any = None
 
-            
-        
+    def __init__(self, assessments: List[Dict], config, **kwargs):
+        super().__init__(**kwargs)
+        self.assessments = assessments
+        self.config = config
+
+    def _run(self, index: int, new_severity: str, visual_reason: str) -> str:
+        """Reclassify an assessment's severity and update derived fields."""
+        if index < 0 or index >= len(self.assessments):
+            return json.dumps({"error": f"Invalid index {index}, valid range: 0-{len(self.assessments)-1}"})
+
+        new_severity_lower = new_severity.lower()
+        valid = {"critical", "high", "medium", "low"}
+        if new_severity_lower not in valid:
+            return json.dumps({"error": f"Invalid severity '{new_severity}', must be one of: {sorted(valid)}"})
+
+        assessment = self.assessments[index]
+        old_severity = assessment.get("severity", "low")
+
+        # Actually modify the assessment in-place
+        assessment["severity"] = new_severity_lower
+        assessment["color_code"] = get_risk_color(self.config, new_severity_lower)
+        assessment["requires_protection"] = new_severity_lower in ("critical", "high")
+
+        # Update reasoning with VLM evidence
+        original_reasoning = assessment.get("reasoning", "Tool-based assessment")
+        assessment["reasoning"] = f"{original_reasoning} -> VLM: {visual_reason}"
+
+        # Add VLM metadata to factors
+        factors = assessment.get("factors", {})
+        factors["vlm_reclassified"] = {
+            "from": old_severity,
+            "to": new_severity_lower,
+            "reason": visual_reason
+        }
+        assessment["factors"] = factors
+
+        print(f"    RECLASSIFY: [{index}] {assessment.get('element_description', '?')} "
+              f"{old_severity} -> {new_severity_lower} ({visual_reason})")
+
+        return json.dumps({
+            "status": "success",
+            "index": index,
+            "element": assessment.get("element_description", "?"),
+            "changed": f"{old_severity} -> {new_severity_lower}",
+            "requires_protection": assessment["requires_protection"]
+        })
 
 
+class SplitAssessmentTool(BaseTool):
+    """Split a text assessment into separate parts. Actually replaces in the list."""
+    name: str = "split_assessment"
+    description: str = (
+        "Split a text assessment into separate parts (e.g., label vs sensitive value). "
+        "Actually replaces the original assessment with multiple new assessments. "
+        "WARNING: This shifts all indices after the split point."
+    )
+    args_schema: Type[BaseModel] = SplitAssessmentInput
+    assessments: Any = None
+    config: Any = None
+
+    def __init__(self, assessments: List[Dict], config, **kwargs):
+        super().__init__(**kwargs)
+        self.assessments = assessments
+        self.config = config
+
+    def _run(self, index: int, parts: List[Dict]) -> str:
+        """Split an assessment into multiple parts and replace in the list."""
+        if index < 0 or index >= len(self.assessments):
+            return json.dumps({"error": f"Invalid index {index}, valid range: 0-{len(self.assessments)-1}"})
+        if not parts or len(parts) < 2:
+            return json.dumps({"error": "Need at least 2 parts for a split"})
+
+        original = self.assessments[index]
+        original_id = original.get("detection_id", "unknown")
+        new_parts = []
+
+        for j, part in enumerate(parts):
+            # Convert SplitPart model to dict if needed
+            if isinstance(part, BaseModel):
+                part = part.model_dump()
+
+            new_assessment = dict(original)
+            new_assessment["detection_id"] = f"{original_id}_split_{j}"
+            new_assessment["element_description"] = part.get(
+                "element_description", original.get("element_description", "Unknown"))
+
+            new_sev = part.get("severity", original.get("severity", "low")).lower()
+            new_assessment["severity"] = new_sev
+            new_assessment["color_code"] = get_risk_color(self.config, new_sev)
+            new_assessment["requires_protection"] = part.get(
+                "requires_protection", new_sev in ("critical", "high"))
+
+            visual_reason = part.get("visual_reason", "VLM split")
+            new_assessment["reasoning"] = f"VLM split: {visual_reason}"
+
+            factors = new_assessment.get("factors", {})
+            factors["vlm_split"] = {
+                "original_id": original_id,
+                "part_index": j,
+                "total_parts": len(parts)
+            }
+            new_assessment["factors"] = factors
+            new_parts.append(new_assessment)
+
+        # Actually replace in the list (modifies in-place)
+        self.assessments[index:index + 1] = new_parts
+
+        descriptions = [p.get("element_description", "?") if isinstance(p, dict)
+                        else p.element_description for p in parts]
+        print(f"    SPLIT: [{index}] {original.get('element_description', '?')} -> {descriptions}")
+
+        return json.dumps({
+            "status": "success",
+            "original_index": index,
+            "split_into": descriptions,
+            "new_count": len(new_parts),
+            "total_assessments": len(self.assessments),
+            "note": "Indices after the split point have shifted. Call get_current_assessments to see updated indices."
+        })
 
 
+class GetCurrentAssessmentsTool(BaseTool):
+    """Get the current state of all assessments with their indices."""
+    name: str = "get_current_assessments"
+    description: str = (
+        "Get the current state of all assessments with their indices. "
+        "Call this after splits to see updated indices, or at any time to review."
+    )
+    assessments: Any = None
 
+    def __init__(self, assessments: List[Dict], **kwargs):
+        super().__init__(**kwargs)
+        self.assessments = assessments
+
+    def _run(self, tool_input: str = "") -> str:
+        """Return summary of all current assessments."""
+        summary = []
+        for i, a in enumerate(self.assessments):
+            summary.append({
+                "index": i,
+                "element_type": a.get("element_type", "unknown"),
+                "element_description": a.get("element_description", "?"),
+                "severity": a.get("severity", "low"),
+                "requires_protection": a.get("requires_protection", False)
+            })
+        return json.dumps({"assessments": summary, "total": len(self.assessments)})
+
+
+class ValidateAssessmentsTool(BaseTool):
+    """Validate consistency across all assessments."""
+    name: str = "validate_assessments"
+    description: str = (
+        "Validate consistency of all current assessments. "
+        "Ensures severity levels match protection requirements. "
+        "Call this after making reclassifications."
+    )
+    assessments: Any = None
+
+    def __init__(self, assessments: List[Dict], **kwargs):
+        super().__init__(**kwargs)
+        self.assessments = assessments
+
+    def _run(self, tool_input: str = "") -> str:
+        """Fix consistency: critical/high must require protection, low must not."""
+        corrections = 0
+        for a in self.assessments:
+            sev = a.get("severity", "low")
+            prot = a.get("requires_protection", False)
+            if sev in ("critical", "high") and not prot:
+                a["requires_protection"] = True
+                corrections += 1
+            if sev == "low" and prot:
+                a["requires_protection"] = False
+                corrections += 1
+        return json.dumps({
+            "status": "validated",
+            "corrections": corrections,
+            "total_assessments": len(self.assessments)
+        })
+
+
+class FinalizeReviewTool(BaseTool):
+    """Signal that the VLM review is complete."""
+    name: str = "finalize_review"
+    description: str = (
+        "Call this when you have finished reviewing all assessments and are satisfied. "
+        "This signals that the review is complete."
+    )
+    assessments: Any = None
+
+    def __init__(self, assessments: List[Dict], **kwargs):
+        super().__init__(**kwargs)
+        self.assessments = assessments
+
+    def _run(self, tool_input: str = "") -> str:
+        """Return final summary of all assessments."""
+        return json.dumps({
+            "status": "finalized",
+            "total_assessments": len(self.assessments),
+            "summary": {
+                "critical": sum(1 for a in self.assessments if a.get("severity") == "critical"),
+                "high": sum(1 for a in self.assessments if a.get("severity") == "high"),
+                "medium": sum(1 for a in self.assessments if a.get("severity") == "medium"),
+                "low": sum(1 for a in self.assessments if a.get("severity") == "low"),
+                "requiring_protection": sum(1 for a in self.assessments if a.get("requires_protection"))
+            }
+        })
