@@ -2,6 +2,7 @@ import time
 import json
 from PIL import Image
 from typing import List, Dict, Optional
+import easyocr
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage
@@ -17,6 +18,7 @@ from utils.models import (
 )
 from agents.local_wrapper import VisionLLM
 from utils.config import get_risk_color
+from utils.callback import Phase2ReviewCallback
 from agents.tools import (
     FaceRiskAssessmentTool,
     TextRiskAssessmentTool,
@@ -97,7 +99,7 @@ class RiskAssessmentAgent:
         }
         return mode_to_model.get(self.reasoning_mode, "llama3.2-vision:11b")
 
-    def _get_tools(self, assessments: Optional[List[Dict]] = None) -> List:
+    def _get_tools(self, assessments: Optional[List[Dict]] = None, image_path: str = None) -> List:
         """
         Initialize Phase 1 and Phase 2 tool instances.
 
@@ -107,12 +109,12 @@ class RiskAssessmentAgent:
 
         Args:
             assessments: Mutable list of assessment dicts from Phase 1 (modified in-place).
-                         None when called from __init__ (Phase 1 only).
+            image_path: Path to original image (for OCR re-crop in SplitAssessmentTool).
 
         Returns:
             List of BaseTool instances
         """
-        # Phase 1: Deterministic assessment tools (always available)
+        # Phase 1: Deterministic assessment tools
         tools = [
             FaceRiskAssessmentTool(self.config, self.privacy_profile),
             TextRiskAssessmentTool(self.config, self.privacy_profile),
@@ -126,17 +128,31 @@ class RiskAssessmentAgent:
 
         # Phase 2: VLM review tools (only when assessments list is available)
         if assessments is not None:
+            # Initialize OCR reader for precise bbox splitting
+            if not hasattr(self, '_ocr_reader'):
+                try:
+                    self._ocr_reader = easyocr.Reader(
+                        ["en"],
+                        gpu=self.config.system.device == "cuda",
+                        verbose=False
+                    )
+                except Exception:
+                    self._ocr_reader = None
+
             tools.extend([
                 ReclassifyAssessmentTool(assessments=assessments, config=self.config),
-                SplitAssessmentTool(assessments=assessments, config=self.config),
+                SplitAssessmentTool(
+                    assessments=assessments,
+                    config=self.config,
+                    ocr_reader=self._ocr_reader,
+                    image_path=image_path
+                ),
                 GetCurrentAssessmentsTool(assessments=assessments),
                 ValidateAssessmentsTool(assessments=assessments),
                 FinalizeReviewTool(assessments=assessments),
             ])
 
         return tools
-
-    # ==================== Main Pipeline ====================
 
     def run(
         self,
@@ -203,7 +219,9 @@ class RiskAssessmentAgent:
 
         # Phase 2: Agentic VLM review
         if self.reasoning_mode != "fast" and annotated_image is not None and assessments:
-            assessments = self._vlm_agent_review(assessments, annotated_image)
+            assessments = self._vlm_agent_review(
+                assessments, annotated_image, image_path=detections.image_path
+            )
 
         # Build final result
         return self._build_result(assessments, detections.image_path, start_time)
@@ -278,7 +296,8 @@ class RiskAssessmentAgent:
     def _build_agent(
         self,
         assessments: List[Dict],
-        annotated_image: Image.Image
+        annotated_image: Image.Image,
+        image_path: str = None
     ) -> AgentExecutor:
         """
         Build the Phase 2 tool-calling agent with multimodal prompt.
@@ -291,57 +310,70 @@ class RiskAssessmentAgent:
         Args:
             assessments: Phase 1 assessment dicts (tools will modify these in-place)
             annotated_image: Annotated image with bounding boxes
+            image_path: Path to original image (for OCR re-crop in split tool)
 
         Returns:
             AgentExecutor with tools bound
         """
         # Create all tools with assessments bound, then extract Phase 2 tools
         # Phase 1 tools = indices 0-7, Phase 2 tools = indices 8+
-        all_tools = self._get_tools(assessments)
+        all_tools = self._get_tools(assessments, image_path=image_path)
         phase2_tools = all_tools[len(self.tools):]  # Everything after Phase 1
 
         # Encode image for multimodal prompt
         image_b64 = self.vlm._image_to_base64(annotated_image)
 
-        # Determine max iterations based on reasoning mode
-        max_iters = 5 if self.reasoning_mode == "balanced" else 10
+        # Scale max iterations based on assessment count and reasoning mode
+        if self.reasoning_mode == "thorough":
+            max_iters = max(10, min(len(assessments), 25))
+        else:  # balanced
+            max_iters = max(10, min(len(assessments), 15))
 
         # Build multimodal prompt:
-        #   - System: /no_think + guidelines + Phase 1 assessments (via {input})
+        #   - System: guidelines + Phase 1 assessments (via {input})
         #   - HumanMessage: annotated image (concrete, multimodal)
         #   - agent_scratchpad: tool call history (managed by AgentExecutor)
+        
         prompt = ChatPromptTemplate.from_messages([
             ("system",
-                "/no_think\n"
-                "You are a visual privacy risk assessment reviewer.\n\n"
+                "You are a senior visual privacy risk assessment reviewer expert in reviewing risks inside an image.\n\n"
                 "You are looking at an annotated image with colored bounding boxes:\n"
                 "- RED boxes: detected faces\n"
                 "- GREEN boxes: detected text regions\n"
                 "- BLUE boxes: detected objects\n\n"
                 "Phase 1 (deterministic tools) produced these risk assessments:\n"
                 "{input}\n\n"
-                "Your job: VISUALLY VERIFY each assessment against the image.\n\n"
-                "Available tools:\n"
-                "- reclassify_assessment: Change severity if visual evidence contradicts Phase 1\n"
-                "- split_assessment: Split a text block that contains both label and value\n"
-                "- get_current_assessments: See updated state after changes\n"
-                "- validate_assessments: Check consistency after reclassifications\n"
-                "- finalize_review: Call when you are done reviewing\n\n"
-                "Rules:\n"
-                "- Only reclassify if you can clearly SEE visual evidence in the image\n"
-                "- Faces without consent should remain critical\n"
-                "- Text labels without actual values (e.g., 'Password:') should be low severity\n"
-                "- Text with actual sensitive values (e.g., '4821') should be critical/high\n"
-                "- After making changes, call validate_assessments\n"
-                "- When satisfied with all assessments, call finalize_review"
+
+                "Your job: visually verify each assessment against the image and correct mistakes.\n\n"
+                "Process:\n"
+                "1. Call get_current_assessments first to see all items with their current indices.\n"
+                "2. Review each item one at a time against what you see in the image.\n"
+                "3. Use reclassify_assessment for incorrect severity.\n"
+                "4. Use split_assessment for composite text (label + value in one block). If you use split_assessment tool, ALWAYS call get_current_assessments sequentially to check the updated indices.\n"
+                "5. Call validate_assessments after all changes.\n"
+                "6. Call finalize_review ONLY after reviewing ALL assessments.\n\n"
+
+                "CRITICAL RULES:\n"
+                "- After split_assessment, indices shift. You MUST call get_current_assessments "
+                "to see updated indices before making any further changes.\n"
+                "- After finalize_review, do NOT call any more tools. Just output a text summary like "
+                "'Review complete.' to end the session.\n\n"
+
+                "Severity guidelines:\n"
+                "- Faces without consent: keep CRITICAL\n"
+                "- Text labels only ('Password:', 'Bank Account:', 'Social Security'): should be LOW\n"
+                "- Text with actual corresponding sensitive values ('4821', '238-49-6521'): should be CRITICAL\n"
+                "- Composite label+value in one block ('PIN: 4821'): split into label (low) + value (critical)\n"
+                "- Devices: only keep HIGH/CRITICAL if you can read sensitive content on the screen. "
+                "If the screen is blank, shows wallpaper, or the device faces away, reclassify to LOW\n\n"
+                "Review ALL assessments before calling finalize_review."
             ),
             HumanMessage(content=[
                 {"type": "text", "text": (
-                    "Here is the annotated image. Review each assessment against "
-                    "what you see and use tools to make corrections. "
+                    "Here is the annotated image. Review each assessment against what you see. "
                     "Call finalize_review when done."
                 )},
-                {"type": "image_url", "image_url": f"data:image/png;base64,{image_b64}"}
+                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{image_b64}"}
             ]),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
@@ -358,7 +390,9 @@ class RiskAssessmentAgent:
             tools=phase2_tools,
             verbose=True,
             max_iterations=max_iters,
-            return_intermediate_steps=True
+            return_intermediate_steps=True,
+            callbacks=[Phase2ReviewCallback()],
+            handle_parsing_errors=True
         )
 
         print(f"  Phase 2 agent built:")
@@ -391,7 +425,8 @@ class RiskAssessmentAgent:
     def _vlm_agent_review(
         self,
         assessments: List[Dict],
-        annotated_image: Image.Image
+        annotated_image: Image.Image,
+        image_path: str = None
     ) -> List[Dict]:
         """
         Phase 2: Run the agentic VLM review.
@@ -405,7 +440,7 @@ class RiskAssessmentAgent:
 
         try:
             # Build Phase 2 agent
-            agent_executor = self._build_agent(assessments, annotated_image)
+            agent_executor = self._build_agent(assessments, annotated_image, image_path=image_path)
 
             # Run the agent (assessments are modified in-place by tools)
             print(f"  Starting VLM agent review ({len(assessments)} assessments)...")

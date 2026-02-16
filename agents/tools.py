@@ -474,6 +474,21 @@ class TextDetectionTool(BaseTool):
                 if text["text_type"] != "general_text" or text.get("is_label_only", False):
                     continue
 
+                # Skip known label words that OCR split from their parent label
+                # e.g., "Bank Account:" split into "Bank" + "Account:" by OCR
+                # But do NOT skip unknown alphabetic strings — those may be passwords
+                # e.g., "HaurerWvifi" near "Password:" IS a password value
+                LABEL_WORDS = {
+                    "bank", "account", "social", "security", "credit", "card",
+                    "password", "pin", "routing", "number", "ssn", "iban",
+                    "name", "address", "email", "phone", "date", "birth",
+                    "expiry", "cvv", "code", "type", "id", "no",
+                }
+                text_content = text.get("text_content", "").strip()
+                text_clean = re.sub(r'[:\s\-_.,;]', '', text_content).lower()
+                if text_clean in LABEL_WORDS:
+                    continue
+
                 # Check spatial proximity (threshold: 200 pixels center-to-center)
                 if self._bbox_distance(label["bbox"], text["bbox"]) < 200:
                     text["text_type"] = value_type
@@ -612,6 +627,7 @@ class ObjectDetectionTool(BaseTool):
                 image_path,
                 conf = 0.25,  # Lower threshold to detect more objects (was 0.5)
                 verbose = False,
+                save = False,
                 device = self.device
             )
 
@@ -1678,16 +1694,146 @@ class SplitAssessmentTool(BaseTool):
     description: str = (
         "Split a text assessment into separate parts (e.g., label vs sensitive value). "
         "Actually replaces the original assessment with multiple new assessments. "
+        "Uses OCR re-crop for precise bounding boxes on each split part. "
         "WARNING: This shifts all indices after the split point."
     )
     args_schema: Type[BaseModel] = SplitAssessmentInput
     assessments: Any = None
     config: Any = None
+    ocr_reader: Any = None
+    image_path: Optional[str] = None
 
-    def __init__(self, assessments: List[Dict], config, **kwargs):
+    def __init__(self, assessments: List[Dict], config, ocr_reader=None, image_path: str = None, **kwargs):
         super().__init__(**kwargs)
         self.assessments = assessments
         self.config = config
+        self.ocr_reader = ocr_reader
+        self.image_path = image_path
+
+    def _ocr_recrop_bboxes(self, original_bbox: List, part_descriptions: List[str]) -> List[List]:
+        """
+        Re-run OCR on a cropped region to get precise sub-bboxes for split parts.
+
+        Args:
+            original_bbox: [x, y, w, h] of the original assessment
+            part_descriptions: List of text descriptions for each split part
+
+        Returns:
+            List of [x, y, w, h] bboxes (absolute coords), one per part.
+            Falls back to original bbox for parts that can't be matched.
+        """
+        if not self.ocr_reader or not self.image_path:
+            return [list(original_bbox)] * len(part_descriptions)
+
+        try:
+            image = Image.open(self.image_path)
+            ox, oy, ow, oh = original_bbox
+
+            # Add padding around crop for better OCR (10% each side, clamped to image)
+            img_w, img_h = image.size
+            pad_x = max(int(ow * 0.1), 5)
+            pad_y = max(int(oh * 0.1), 5)
+            crop_x1 = max(0, ox - pad_x)
+            crop_y1 = max(0, oy - pad_y)
+            crop_x2 = min(img_w, ox + ow + pad_x)
+            crop_y2 = min(img_h, oy + oh + pad_y)
+
+            crop = image.crop((crop_x1, crop_y1, crop_x2, crop_y2))
+            crop_array = np.array(crop)
+
+            # Run OCR with tight word separation for granular detection
+            ocr_results = self.ocr_reader.readtext(
+                crop_array,
+                width_ths=0.1,      # Tight word separation
+                paragraph=False,
+            )
+
+            if not ocr_results:
+                return [list(original_bbox)] * len(part_descriptions)
+
+            # Convert OCR results to absolute coordinates
+            ocr_words = []
+            for bbox_points, text, conf in ocr_results:
+                if conf < 0.2:
+                    continue
+                x_coords = [p[0] for p in bbox_points]
+                y_coords = [p[1] for p in bbox_points]
+                # Convert crop-relative to absolute image coordinates
+                abs_bbox = [
+                    int(min(x_coords) + crop_x1),
+                    int(min(y_coords) + crop_y1),
+                    int(max(x_coords) - min(x_coords)),
+                    int(max(y_coords) - min(y_coords))
+                ]
+                ocr_words.append({"text": text.strip(), "bbox": abs_bbox})
+
+            # Match each part description to OCR words
+            result_bboxes = []
+            used_indices = set()
+
+            for desc in part_descriptions:
+                desc_lower = desc.lower().strip()
+                best_match_idx = None
+                best_score = 0
+
+                for wi, word in enumerate(ocr_words):
+                    if wi in used_indices:
+                        continue
+                    word_lower = word["text"].lower().strip()
+
+                    # Exact match
+                    if word_lower == desc_lower or desc_lower in word_lower or word_lower in desc_lower:
+                        score = len(word_lower) / max(len(desc_lower), 1)
+                        # Prefer closer length matches
+                        if score > best_score:
+                            best_score = score
+                            best_match_idx = wi
+
+                if best_match_idx is not None:
+                    used_indices.add(best_match_idx)
+                    result_bboxes.append(ocr_words[best_match_idx]["bbox"])
+                else:
+                    # No match found — try merging multiple OCR words
+                    merged = self._try_merge_match(desc_lower, ocr_words, used_indices)
+                    if merged:
+                        for idx in merged["used"]:
+                            used_indices.add(idx)
+                        result_bboxes.append(merged["bbox"])
+                    else:
+                        result_bboxes.append(list(original_bbox))
+
+            return result_bboxes
+
+        except Exception as e:
+            print(f"    [OCR re-crop] Failed: {e}, using original bbox")
+            return [list(original_bbox)] * len(part_descriptions)
+
+    def _try_merge_match(self, target: str, ocr_words: List[Dict], used: set) -> Optional[Dict]:
+        """
+        Try to match a description by merging consecutive OCR words.
+        E.g., target="PIN: 4821" might match OCR words ["PIN:", "4821"].
+
+        Returns:
+            Dict with "bbox" (merged) and "used" (set of indices), or None.
+        """
+        # Try merging 2-4 consecutive available words
+        available = [(i, w) for i, w in enumerate(ocr_words) if i not in used]
+        for start in range(len(available)):
+            for length in range(2, min(5, len(available) - start + 1)):
+                group = available[start:start + length]
+                merged_text = " ".join(w["text"].lower().strip() for _, w in group)
+                # Check if merged text contains target or vice versa
+                if target in merged_text or merged_text in target:
+                    # Merge bboxes: union of all word bboxes
+                    all_x1 = min(w["bbox"][0] for _, w in group)
+                    all_y1 = min(w["bbox"][1] for _, w in group)
+                    all_x2 = max(w["bbox"][0] + w["bbox"][2] for _, w in group)
+                    all_y2 = max(w["bbox"][1] + w["bbox"][3] for _, w in group)
+                    return {
+                        "bbox": [all_x1, all_y1, all_x2 - all_x1, all_y2 - all_y1],
+                        "used": set(i for i, _ in group)
+                    }
+        return None
 
     def _run(self, index: int, parts: List[Dict]) -> str:
         """Split an assessment into multiple parts and replace in the list."""
@@ -1698,13 +1844,24 @@ class SplitAssessmentTool(BaseTool):
 
         original = self.assessments[index]
         original_id = original.get("detection_id", "unknown")
-        new_parts = []
+        original_bbox = original.get("bbox", [0, 0, 0, 0])
 
-        for j, part in enumerate(parts):
-            # Convert SplitPart model to dict if needed
+        # Convert parts for processing
+        processed_parts = []
+        for part in parts:
             if isinstance(part, BaseModel):
                 part = part.model_dump()
+            processed_parts.append(part)
 
+        # Get precise sub-bboxes via OCR re-crop
+        part_descriptions = [
+            p.get("element_description", original.get("element_description", ""))
+            for p in processed_parts
+        ]
+        sub_bboxes = self._ocr_recrop_bboxes(original_bbox, part_descriptions)
+
+        new_parts = []
+        for j, part in enumerate(processed_parts):
             new_assessment = dict(original)
             new_assessment["detection_id"] = f"{original_id}_split_{j}"
             new_assessment["element_description"] = part.get(
@@ -1716,6 +1873,9 @@ class SplitAssessmentTool(BaseTool):
             new_assessment["requires_protection"] = part.get(
                 "requires_protection", new_sev in ("critical", "high"))
 
+            # Assign precise sub-bbox from OCR re-crop
+            new_assessment["bbox"] = sub_bboxes[j]
+
             visual_reason = part.get("visual_reason", "VLM split")
             new_assessment["reasoning"] = f"VLM split: {visual_reason}"
 
@@ -1723,7 +1883,10 @@ class SplitAssessmentTool(BaseTool):
             factors["vlm_split"] = {
                 "original_id": original_id,
                 "part_index": j,
-                "total_parts": len(parts)
+                "total_parts": len(processed_parts),
+                "original_bbox": list(original_bbox),
+                "sub_bbox": sub_bboxes[j],
+                "bbox_precise": sub_bboxes[j] != list(original_bbox)
             }
             new_assessment["factors"] = factors
             new_parts.append(new_assessment)
@@ -1731,9 +1894,11 @@ class SplitAssessmentTool(BaseTool):
         # Actually replace in the list (modifies in-place)
         self.assessments[index:index + 1] = new_parts
 
-        descriptions = [p.get("element_description", "?") if isinstance(p, dict)
-                        else p.element_description for p in parts]
+        descriptions = [p.get("element_description", "?") for p in processed_parts]
+        bbox_info = ["precise" if sub_bboxes[i] != list(original_bbox) else "original"
+                     for i in range(len(processed_parts))]
         print(f"    SPLIT: [{index}] {original.get('element_description', '?')} -> {descriptions}")
+        print(f"    BBOX:  {bbox_info}")
 
         return json.dumps({
             "status": "success",
@@ -1741,6 +1906,7 @@ class SplitAssessmentTool(BaseTool):
             "split_into": descriptions,
             "new_count": len(new_parts),
             "total_assessments": len(self.assessments),
+            "bbox_precision": bbox_info,
             "note": "Indices after the split point have shifted. Call get_current_assessments to see updated indices."
         })
 

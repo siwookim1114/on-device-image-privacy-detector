@@ -1,9 +1,9 @@
 {
   "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample1.png",
   "overall_risk_level": "critical",
-  "processing_time_ms": 235396.71778678894,
-  "total_assessments": 14,
-  "confirmed_risks": 7,
+  "processing_time_ms": 271591.2208557129,
+  "total_assessments": 15,
+  "confirmed_risks": 5,
   "faces_pending_identity": 0,
   "detection_summary": {
     "faces": 1,
@@ -13,7 +13,7 @@
   },
   "assessments": [
     {
-      "detection_id": "a9f6d4fc-3495-42b7-9f9f-e3fb0a9657ff",
+      "detection_id": "3b0b1e5e-a85e-49d9-bceb-68ad459a32dc",
       "element_type": "face",
       "element_description": "Face (medium, high clarity)",
       "risk_type": "identity_exposure",
@@ -32,7 +32,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "27e81931-b061-4091-a80d-8b492a0b664e",
+      "detection_id": "b1bb649a-b066-4701-b927-d9bdc0b78172",
       "element_type": "text",
       "element_description": "Text: Social Security",
       "risk_type": "information_disclosure",
@@ -51,13 +51,13 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "3a501ac9-ea3b-4286-b866-c92fb56dc714",
+      "detection_id": "0cf2ae93-4c96-4525-9636-553a1710fd9e",
       "element_type": "text",
       "element_description": "Text: #:",
       "risk_type": "information_disclosure",
       "severity": "low",
       "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: The text ' #: ' is a label prefix for the Social Security number, not the sensitive value itself. The actual sensitive value '238-49-6521' is captured in assessment [3].",
+      "reasoning": "Tool-based assessment -> VLM: The text ' #:' is a label for the Social Security number, not sensitive data itself.",
       "bbox": [
         486,
         1176,
@@ -70,7 +70,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "b19e90c9-252e-41ba-8573-5fa9f79f8101",
+      "detection_id": "0a0e23b1-379a-41d5-8758-6adda46eb4d6",
       "element_type": "text",
       "element_description": "Text: 238-49-6521",
       "risk_type": "information_disclosure",
@@ -89,18 +89,18 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "ad1f6fb8-4240-4454-aaef-86ce21184e82_split_0",
+      "detection_id": "b6c1b3a0-0ca4-4ece-adf5-639a27518733_split_0",
       "element_type": "text",
-      "element_description": "Text label: Bank Account:",
+      "element_description": "Bank Account:",
       "risk_type": "information_disclosure",
       "severity": "low",
       "color_code": "#90EE90",
-      "reasoning": "VLM split: Label prefix for bank account number",
+      "reasoning": "VLM split: This is a label for the bank account number.",
       "bbox": [
-        222,
-        1291,
-        515,
-        60
+        315,
+        1305,
+        137,
+        40
       ],
       "requires_protection": false,
       "consent_status": null,
@@ -108,18 +108,18 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "ad1f6fb8-4240-4454-aaef-86ce21184e82_split_1",
+      "detection_id": "b6c1b3a0-0ca4-4ece-adf5-639a27518733_split_1",
       "element_type": "text",
-      "element_description": "Bank account number: 8765 4321 0987",
+      "element_description": "8765 4321 0987",
       "risk_type": "information_disclosure",
       "severity": "critical",
       "color_code": "#FF0000",
-      "reasoning": "VLM split: Sensitive financial account number",
+      "reasoning": "VLM split: This is a sensitive bank account number.",
       "bbox": [
-        222,
-        1291,
-        515,
-        60
+        456,
+        1300,
+        94,
+        42
       ],
       "requires_protection": true,
       "consent_status": null,
@@ -127,18 +127,37 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "1674fd04-f6c1-46dd-9be4-6facf7ed62b1",
+      "detection_id": "6fe6830c-5880-49ba-9786-7a4702bcb8a2_split_0",
       "element_type": "text",
-      "element_description": "Text: PIN: 4821",
+      "element_description": "PIN:",
+      "risk_type": "information_disclosure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "VLM split: This is a label for the PIN.",
+      "bbox": [
+        231,
+        1369,
+        86,
+        44
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "critical"
+    },
+    {
+      "detection_id": "6fe6830c-5880-49ba-9786-7a4702bcb8a2_split_1",
+      "element_type": "text",
+      "element_description": "4821",
       "risk_type": "information_disclosure",
       "severity": "critical",
       "color_code": "#FF0000",
-      "reasoning": "Tool-based assessment",
+      "reasoning": "VLM split: This is a sensitive PIN value.",
       "bbox": [
-        229,
-        1356,
-        216,
-        60
+        324,
+        1358,
+        119,
+        55
       ],
       "requires_protection": true,
       "consent_status": null,
@@ -146,7 +165,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "7dcf61cb-b7e3-470f-a3b0-01bdc4c8c1a2",
+      "detection_id": "e6341203-4488-436b-9f1d-43155a026f50",
       "element_type": "text",
       "element_description": "Text: Password:",
       "risk_type": "information_disclosure",
@@ -165,7 +184,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "d4654e55-426e-4218-84fe-6af671705264",
+      "detection_id": "6b60c8de-eeb1-47bc-bb42-1f3e78cf2815",
       "element_type": "text",
       "element_description": "Text: Magicl231",
       "risk_type": "information_disclosure",
@@ -184,45 +203,45 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "b803ad8c-6071-47e3-bb09-68e9c1e3e9f4",
+      "detection_id": "9c46ec59-f799-445a-8159-8b46a5bf8a07",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
-      "severity": "high",
-      "color_code": "#FF6600",
-      "reasoning": "Tool-based assessment",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment -> VLM: The laptop screen is not visible; no sensitive data is displayed on the screen.",
       "bbox": [
         0,
         727,
         630,
         409
       ],
-      "requires_protection": true,
+      "requires_protection": false,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "2ed2ea13-1a20-4168-a808-42af112040bb",
+      "detection_id": "e8440cac-4e07-44cb-a5eb-bc75cb46eec9",
       "element_type": "object",
       "element_description": "Object: cell phone",
       "risk_type": "information_disclosure",
-      "severity": "high",
-      "color_code": "#FF6600",
-      "reasoning": "Tool-based assessment",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "Tool-based assessment -> VLM: The cell phone screen is not visible; no sensitive data is displayed on the screen.",
       "bbox": [
         0,
         1100,
         143,
         108
       ],
-      "requires_protection": true,
+      "requires_protection": false,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "c8cbe582-e77e-4b2a-be83-066cfe166c11",
+      "detection_id": "5c7670f0-4bde-41f0-ba94-ee62f89bc106",
       "element_type": "object",
       "element_description": "Object: book",
       "risk_type": "context_exposure",
@@ -241,7 +260,7 @@
       "user_sensitivity_applied": "medium"
     },
     {
-      "detection_id": "6fc8fa56-f342-4277-9afe-819812dc1f3c",
+      "detection_id": "adc5fbd0-9577-4e37-8b91-0b18791db009",
       "element_type": "object",
       "element_description": "Object: book",
       "risk_type": "context_exposure",
@@ -260,7 +279,7 @@
       "user_sensitivity_applied": "medium"
     },
     {
-      "detection_id": "c6eede0b-c419-4f27-8238-3ba4b8f2daf1",
+      "detection_id": "d0f0d7c1-3f0a-40cd-a69e-d75a7dba454e",
       "element_type": "object",
       "element_description": "Object: book",
       "risk_type": "context_exposure",

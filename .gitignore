@@ -55,10 +55,11 @@ logs/
 *.sqlite
 
 # Test outputs
-data/test_results/
+data/
 *.png
 *.jpg
 *.jpeg
+*.json
 
 # OS
 .DS_Store

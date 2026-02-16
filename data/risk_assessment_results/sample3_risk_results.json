@@ -1,9 +1,9 @@
 {
   "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample3.png",
   "overall_risk_level": "critical",
-  "processing_time_ms": 263285.41898727417,
-  "total_assessments": 59,
-  "confirmed_risks": 39,
+  "processing_time_ms": 495994.75598335266,
+  "total_assessments": 61,
+  "confirmed_risks": 43,
   "faces_pending_identity": 0,
   "detection_summary": {
     "faces": 7,
@@ -13,7 +13,7 @@
   },
   "assessments": [
     {
-      "detection_id": "f2d1c0f2-3c83-4395-a342-041b7602ece6",
+      "detection_id": "af4fd2bb-0c7e-4045-ab15-e0d3bd1ddcdf",
       "element_type": "face",
       "element_description": "Face (small, high clarity)",
       "risk_type": "identity_exposure",
@@ -32,7 +32,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "cddd52cc-cb8d-41bd-a66b-aab43e1d3f65",
+      "detection_id": "919982cd-4159-465d-b098-a9726834e4d6",
       "element_type": "face",
       "element_description": "Face (small, high clarity)",
       "risk_type": "identity_exposure",
@@ -51,7 +51,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "7b536380-21c6-4931-ada0-e5f1d22438db",
+      "detection_id": "a88325ee-8071-4890-816e-9cd678c7cca2",
       "element_type": "face",
       "element_description": "Face (small, high clarity)",
       "risk_type": "identity_exposure",
@@ -70,7 +70,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "b652a341-9eb7-4ca5-8bb4-82dc81d6137f",
+      "detection_id": "666bf404-1628-41c5-981c-43ef9c468d9b",
       "element_type": "face",
       "element_description": "Face (small, high clarity)",
       "risk_type": "identity_exposure",
@@ -89,7 +89,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "71cbb652-fd4e-4151-92d6-6b259c705393",
+      "detection_id": "f59139d0-7c17-40c5-9f45-4f1adffbdda6",
       "element_type": "face",
       "element_description": "Face (small, high clarity)",
       "risk_type": "identity_exposure",
@@ -108,7 +108,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "8f669968-68a5-4acd-9123-72856e4de279",
+      "detection_id": "e9b7130b-0b1a-4958-aed4-601c0c7a5442",
       "element_type": "face",
       "element_description": "Face (small, high clarity)",
       "risk_type": "identity_exposure",
@@ -127,7 +127,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "306e6aee-2b17-4404-9303-8645da6eb0f3",
+      "detection_id": "6974f9dc-0fe2-4ba4-8244-f3af35fef998",
       "element_type": "face",
       "element_description": "Face (small, high clarity)",
       "risk_type": "identity_exposure",
@@ -146,7 +146,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "b09e62bc-4c6b-43dc-87bc-243ad4169ef8",
+      "detection_id": "e5b71ddf-1cc2-40f0-b221-883c1f1be2cf",
       "element_type": "text",
       "element_description": "Text: Social Security #:",
       "risk_type": "information_disclosure",
@@ -165,13 +165,13 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "bb99d1ca-0084-4f54-9a24-70946b638e7e",
+      "detection_id": "6e0d6553-a33b-4c09-9f94-6367792e9cd4",
       "element_type": "text",
       "element_description": "Text: 233",
       "risk_type": "information_disclosure",
       "severity": "critical",
       "color_code": "#FF0000",
-      "reasoning": "Tool-based assessment -> VLM: Text '233' is part of the Social Security number '233-45-6789' visible in the image.",
+      "reasoning": "Tool-based assessment -> VLM: Text '233' is part of a Social Security Number (233-45-6789), which is sensitive and requires critical protection.",
       "bbox": [
         75,
         449,
@@ -184,7 +184,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "d685d356-9589-4da0-99ad-1e287e8b432c",
+      "detection_id": "daf13dbc-4af3-44cb-8513-71c1bcaab9c3",
       "element_type": "text",
       "element_description": "Text: Liia123#s!",
       "risk_type": "information_disclosure",
@@ -203,7 +203,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "bf285f81-1f70-43bc-8e74-2c35cb98c142",
+      "detection_id": "cac3f76e-ad11-4294-9e97-fe3e84ce17da",
       "element_type": "text",
       "element_description": "Text: 232",
       "risk_type": "information_disclosure",
@@ -222,7 +222,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "d1507e6b-9ce3-4163-a8b2-856e454038dc",
+      "detection_id": "15f3a461-8a8b-4d37-a029-294c13d05a8f",
       "element_type": "text",
       "element_description": "Text: 45-6193",
       "risk_type": "information_disclosure",
@@ -241,7 +241,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "f05e8666-7847-41d6-8b4d-09c0ce8a237d",
+      "detection_id": "83399e4a-a6a8-41cb-b799-5a9058ad4d88",
       "element_type": "text",
       "element_description": "Text: Bank Account:",
       "risk_type": "information_disclosure",
@@ -260,7 +260,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "c4f6b2e3-1759-4f22-94ea-1e757739d69a",
+      "detection_id": "e215c07b-5682-459f-b9f1-8472482da01c",
       "element_type": "text",
       "element_description": "Text: 9043 5698",
       "risk_type": "information_disclosure",
@@ -279,7 +279,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "7a079074-a0f2-442e-a372-5d9ed5aac713",
+      "detection_id": "0cdba823-86de-4c8a-8c3c-307acb706bdb",
       "element_type": "text",
       "element_description": "Text: KingRidero5!",
       "risk_type": "information_disclosure",
@@ -298,7 +298,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "e2a82537-e481-470a-b4b8-15ad1941fb21",
+      "detection_id": "549fd983-99d7-4cc4-aebf-faa5f5926e41",
       "element_type": "text",
       "element_description": "Text: 5317",
       "risk_type": "information_disclosure",
@@ -317,7 +317,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "bfaa1993-e68b-4e66-ab15-f08c5aa7896b",
+      "detection_id": "a57ac766-9e00-4546-8dd7-c7b1d5e91d02",
       "element_type": "text",
       "element_description": "Text: HaurerWvifi",
       "risk_type": "information_disclosure",
@@ -336,7 +336,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "321d7942-5d5a-4358-92c7-51a73e0b55a5",
+      "detection_id": "d4061dea-67f8-4d12-9b56-e78e9f60da3b",
       "element_type": "text",
       "element_description": "Text: Credit Card:",
       "risk_type": "information_disclosure",
@@ -355,7 +355,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "4fb2f57d-5612-4b92-8274-350017c984ff",
+      "detection_id": "23596d99-aef0-4017-94f6-f8e02fd17206",
       "element_type": "text",
       "element_description": "Text: 459270-4625",
       "risk_type": "information_disclosure",
@@ -374,7 +374,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "b1d867b7-58af-4dd5-9f62-1034957ef9af",
+      "detection_id": "038566f1-9792-4afb-975b-6da54ebc0686",
       "element_type": "text",
       "element_description": "Text: Password:",
       "risk_type": "information_disclosure",
@@ -393,13 +393,13 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "3c451735-ddad-46e7-ab7d-b2dee5553546",
+      "detection_id": "d8289fb8-466d-40b9-b717-c532af7bc531",
       "element_type": "text",
       "element_description": "Text: 6783",
       "risk_type": "information_disclosure",
       "severity": "critical",
       "color_code": "#FF0000",
-      "reasoning": "Tool-based assessment -> VLM: Text '6783' is part of the password 'Flower 7%' visible in the image.",
+      "reasoning": "Tool-based assessment -> VLM: Text '6783' is part of a bank account number (6783 5421), which is sensitive and requires critical protection.",
       "bbox": [
         199,
         983,
@@ -412,7 +412,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "5c50e71d-812d-47ed-b870-61c5774ea457",
+      "detection_id": "57a96187-d02f-44e1-af5c-e236663e0eb7",
       "element_type": "text",
       "element_description": "Text: 6978243",
       "risk_type": "information_disclosure",
@@ -431,13 +431,13 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "81846c4d-d360-418a-a8bd-770289881206",
+      "detection_id": "708a6172-e98c-40eb-89ca-4a16edb84868",
       "element_type": "text",
       "element_description": "Text: Account",
       "risk_type": "information_disclosure",
       "severity": "low",
       "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Text 'Account' is a label, not a sensitive value.",
+      "reasoning": "Tool-based assessment",
       "bbox": [
         631,
         981,
@@ -447,10 +447,10 @@
       "requires_protection": false,
       "consent_status": null,
       "consent_confidence": 0.0,
-      "user_sensitivity_applied": "critical"
+      "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "42a47e1e-7e1e-44b3-b4e0-1132deb12c5b",
+      "detection_id": "b1d60128-247a-4ea4-b064-591bab808099",
       "element_type": "text",
       "element_description": "Text: 5e67 2510 9221",
       "risk_type": "information_disclosure",
@@ -469,7 +469,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "2b3215b3-1ee7-4c69-b1d5-017d38744cdb",
+      "detection_id": "ca0a4690-c03e-44e3-9f66-a69b1a43edc6",
       "element_type": "text",
       "element_description": "Text: Mangol1195",
       "risk_type": "information_disclosure",
@@ -488,7 +488,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "8258b347-52da-4837-8f84-0ef4f602ce9a",
+      "detection_id": "444df814-9aab-4681-a380-cffa1a5f9acf",
       "element_type": "text",
       "element_description": "Text: 5746",
       "risk_type": "information_disclosure",
@@ -507,13 +507,32 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "0bd00256-ed26-4c95-ac65-56d020b65cd0",
+      "detection_id": "fcf2e8d5-c614-4831-8f88-bb17c33b8dd3_split_0",
       "element_type": "text",
-      "element_description": "Text: Pin:2386",
+      "element_description": "Pin:",
+      "risk_type": "information_disclosure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "VLM split: Text 'Pin:' is a label, not sensitive data.",
+      "bbox": [
+        716,
+        1006,
+        122,
+        27
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "critical"
+    },
+    {
+      "detection_id": "fcf2e8d5-c614-4831-8f88-bb17c33b8dd3_split_1",
+      "element_type": "text",
+      "element_description": "2386",
       "risk_type": "information_disclosure",
       "severity": "critical",
       "color_code": "#FF0000",
-      "reasoning": "Tool-based assessment",
+      "reasoning": "VLM split: Text '2386' is a PIN value, which is sensitive and requires critical protection.",
       "bbox": [
         718,
         1007,
@@ -526,18 +545,37 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "88aa5354-418d-4a9b-8a6a-7dd744b1c4c3",
+      "detection_id": "633f6755-fe3c-4b9d-9a83-4845fc875c49_split_0",
       "element_type": "text",
-      "element_description": "Text: Card: 4532 1604 8762",
+      "element_description": "Card:",
+      "risk_type": "information_disclosure",
+      "severity": "low",
+      "color_code": "#90EE90",
+      "reasoning": "VLM split: Text 'Card:' is a label, not sensitive data.",
+      "bbox": [
+        652,
+        1427,
+        46,
+        16
+      ],
+      "requires_protection": false,
+      "consent_status": null,
+      "consent_confidence": 0.0,
+      "user_sensitivity_applied": "critical"
+    },
+    {
+      "detection_id": "633f6755-fe3c-4b9d-9a83-4845fc875c49_split_1",
+      "element_type": "text",
+      "element_description": "4532 1604 8762",
       "risk_type": "information_disclosure",
       "severity": "critical",
       "color_code": "#FF0000",
-      "reasoning": "Tool-based assessment",
+      "reasoning": "VLM split: Text '4532 1604 8762' is a credit card number, which is sensitive and requires critical protection.",
       "bbox": [
-        653,
-        1425,
-        188,
-        20
+        704,
+        1427,
+        44,
+        18
       ],
       "requires_protection": true,
       "consent_status": null,
@@ -545,7 +583,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "45302098-ae3f-4326-9e5d-bb868bb26040",
+      "detection_id": "2c6536e8-412f-406d-9dff-1690d5a51ed3",
       "element_type": "text",
       "element_description": "Text: Password:",
       "risk_type": "information_disclosure",
@@ -564,7 +602,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "ee6f13dd-eec9-4d85-8b35-b982358916f0",
+      "detection_id": "877155c8-e1cf-492b-9b9e-f3157bde99b5",
       "element_type": "text",
       "element_description": "Text: Account: 8462",
       "risk_type": "information_disclosure",
@@ -583,7 +621,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "ac330959-113c-46d2-993f-5e7c875e8644",
+      "detection_id": "a491a756-4d38-4980-975d-13dd5c70243a",
       "element_type": "text",
       "element_description": "Text: 378 5421",
       "risk_type": "information_disclosure",
@@ -602,7 +640,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "dc795f37-1b05-462a-821c-8fb3f76463fb",
+      "detection_id": "af836052-fc54-438d-8c05-d11a31f8969b",
       "element_type": "text",
       "element_description": "Text: Flower 7%!",
       "risk_type": "information_disclosure",
@@ -621,7 +659,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "1775d2ff-7f11-4337-98f2-127a89bab5ca",
+      "detection_id": "d4778529-9803-4279-aca2-e199a1d15754",
       "element_type": "text",
       "element_description": "Text: PIN_",
       "risk_type": "information_disclosure",
@@ -640,13 +678,13 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "ffa48ca0-1c41-4008-a10f-560f28e5215e",
+      "detection_id": "9f5c80f3-3852-4dcb-ab53-e360bf3f8432",
       "element_type": "text",
       "element_description": "Text: 45-6789",
       "risk_type": "information_disclosure",
       "severity": "critical",
       "color_code": "#FF0000",
-      "reasoning": "Tool-based assessment -> VLM: Text '45-6789' is a Social Security number visible in the image.",
+      "reasoning": "Tool-based assessment -> VLM: Text '45-6789' is part of a Social Security Number (233-45-6789), which is sensitive and requires critical protection.",
       "bbox": [
         125,
         449,
@@ -659,7 +697,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "864f4c0e-31fd-4e35-a1c6-442107efe368",
+      "detection_id": "9d567cdb-52c6-4f75-93c9-52162303ddce",
       "element_type": "text",
       "element_description": "Text: Password:",
       "risk_type": "information_disclosure",
@@ -678,13 +716,13 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "99cdc5c5-ea12-43eb-9965-f5b61a0787b4",
+      "detection_id": "7ac6527f-9027-454a-8456-8367c99e6af8",
       "element_type": "text",
       "element_description": "Text: card:",
       "risk_type": "information_disclosure",
       "severity": "low",
       "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Text 'card:' is a label, not a sensitive value.",
+      "reasoning": "Tool-based assessment",
       "bbox": [
         286,
         959,
@@ -694,10 +732,10 @@
       "requires_protection": false,
       "consent_status": null,
       "consent_confidence": 0.0,
-      "user_sensitivity_applied": "critical"
+      "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "3f1638c2-9745-4901-954e-a310515e9093",
+      "detection_id": "71e0d290-5a21-4a8c-b26f-3016ef3c8780",
       "element_type": "text",
       "element_description": "Text: 345",
       "risk_type": "information_disclosure",
@@ -716,12 +754,12 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "555b5018-5750-4847-9e52-1726f3885049",
+      "detection_id": "1072dc5c-cd27-4af3-a27a-0e4872a8bbb0",
       "element_type": "text",
       "element_description": "Text: Bank",
       "risk_type": "information_disclosure",
-      "severity": "critical",
-      "color_code": "#FF0000",
+      "severity": "low",
+      "color_code": "#90EE90",
       "reasoning": "Tool-based assessment",
       "bbox": [
         570,
@@ -729,18 +767,18 @@
         58,
         28
       ],
-      "requires_protection": true,
+      "requires_protection": false,
       "consent_status": null,
       "consent_confidence": 0.0,
-      "user_sensitivity_applied": "critical"
+      "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "a735d2b9-e7af-4b5d-86cb-06c4e5dc0ebb",
+      "detection_id": "02c38633-ffd3-4c09-ba12-6478bad4b8bf",
       "element_type": "text",
       "element_description": "Text: Social",
       "risk_type": "information_disclosure",
-      "severity": "critical",
-      "color_code": "#FF0000",
+      "severity": "low",
+      "color_code": "#90EE90",
       "reasoning": "Tool-based assessment",
       "bbox": [
         379,
@@ -748,18 +786,18 @@
         46,
         20
       ],
-      "requires_protection": true,
+      "requires_protection": false,
       "consent_status": null,
       "consent_confidence": 0.0,
-      "user_sensitivity_applied": "critical"
+      "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "5d7d3aa9-b209-441e-8d1c-2847e0846bf0",
+      "detection_id": "b6054197-30dc-4097-abad-fa9e0b69756a",
       "element_type": "text",
       "element_description": "Text: Security",
       "risk_type": "information_disclosure",
-      "severity": "critical",
-      "color_code": "#FF0000",
+      "severity": "low",
+      "color_code": "#90EE90",
       "reasoning": "Tool-based assessment",
       "bbox": [
         424,
@@ -767,13 +805,13 @@
         64,
         26
       ],
-      "requires_protection": true,
+      "requires_protection": false,
       "consent_status": null,
       "consent_confidence": 0.0,
-      "user_sensitivity_applied": "critical"
+      "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "f6d51cf0-ee19-4534-a879-a5b4fd557ed2",
+      "detection_id": "bbe9d94f-3b7f-4e73-86ef-1f54b23ce10e",
       "element_type": "text",
       "element_description": "Text: 349-08-",
       "risk_type": "information_disclosure",
@@ -792,7 +830,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "3d914535-aad6-4695-8dba-19c76f23e1d3",
+      "detection_id": "5fd1581f-8b32-41d4-a971-4c3080b9d853",
       "element_type": "text",
       "element_description": "Text: 2137",
       "risk_type": "information_disclosure",
@@ -811,12 +849,12 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "51279357-4e8b-4c56-b0ed-a9462416eaab",
+      "detection_id": "231c8320-e1fd-4eed-bb00-73eef6640052",
       "element_type": "text",
       "element_description": "Text: Bank",
       "risk_type": "information_disclosure",
-      "severity": "critical",
-      "color_code": "#FF0000",
+      "severity": "low",
+      "color_code": "#90EE90",
       "reasoning": "Tool-based assessment",
       "bbox": [
         354,
@@ -824,18 +862,18 @@
         42,
         24
       ],
-      "requires_protection": true,
+      "requires_protection": false,
       "consent_status": null,
       "consent_confidence": 0.0,
-      "user_sensitivity_applied": "critical"
+      "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "728b00cd-4a47-4916-b3e5-512b44dc66af",
+      "detection_id": "6956e0e1-ae52-4aaa-b135-26780d885ba1",
       "element_type": "text",
       "element_description": "Text: Account:",
       "risk_type": "information_disclosure",
-      "severity": "critical",
-      "color_code": "#FF0000",
+      "severity": "low",
+      "color_code": "#90EE90",
       "reasoning": "Tool-based assessment",
       "bbox": [
         396,
@@ -843,13 +881,13 @@
         60,
         25
       ],
-      "requires_protection": true,
+      "requires_protection": false,
       "consent_status": null,
       "consent_confidence": 0.0,
-      "user_sensitivity_applied": "critical"
+      "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "af4c8e43-9828-411a-8fbb-8682776fac30",
+      "detection_id": "6a0e3a3f-6854-4dd1-8c13-d1c54998fbb8",
       "element_type": "text",
       "element_description": "Text: 5452",
       "risk_type": "information_disclosure",
@@ -868,7 +906,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "823a8f12-9f21-4395-a45e-a339c66d7bcf",
+      "detection_id": "289350f1-4578-40a2-b2bc-d019b8555bb1",
       "element_type": "text",
       "element_description": "Text: 5477",
       "risk_type": "information_disclosure",
@@ -887,7 +925,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "0f83adf1-9c8b-4a01-a475-7ef08ecf441e",
+      "detection_id": "d7a49f57-44aa-4f80-bed6-dc56245b928f",
       "element_type": "text",
       "element_description": "Text: 5213",
       "risk_type": "information_disclosure",
@@ -906,7 +944,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "1984ae3f-703d-4f8d-a613-e241952816b8",
+      "detection_id": "c86c4386-ac24-4232-aea7-199f2e467a4e",
       "element_type": "text",
       "element_description": "Text: PIn :",
       "risk_type": "information_disclosure",
@@ -925,7 +963,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "4ca615eb-95df-47f8-baad-049e71e81707",
+      "detection_id": "ce4c0834-cde9-4ba7-b187-772931d745c8",
       "element_type": "text",
       "element_description": "Text: 3902",
       "risk_type": "information_disclosure",
@@ -944,178 +982,178 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "281f08fa-6c76-4547-870d-865cf19cc223",
+      "detection_id": "b63c79ee-f9a9-4ce8-8e4b-6dddbc14cb8a",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
-      "severity": "low",
-      "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Laptop is a device, not sensitive data.",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
       "bbox": [
         0,
         789,
         317,
         161
       ],
-      "requires_protection": false,
+      "requires_protection": true,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "ebb5095d-aa58-43a2-b87a-f08a5127502e",
+      "detection_id": "6bbb73aa-7776-4dbe-b4fa-1aabf62c3d11",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
-      "severity": "low",
-      "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Laptop is a device, not sensitive data.",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
       "bbox": [
         511,
         1255,
         297,
         155
       ],
-      "requires_protection": false,
+      "requires_protection": true,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "707fb75d-bc3f-40dd-89a4-f32173c00d6a",
+      "detection_id": "7e69be73-444d-4732-a998-8809f36b91d2",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
-      "severity": "low",
-      "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Laptop is a device, not sensitive data.",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
       "bbox": [
         0,
         1270,
         327,
         210
       ],
-      "requires_protection": false,
+      "requires_protection": true,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "81f3f624-9738-4fc1-a2b9-288a8e1605a5",
+      "detection_id": "d2cd2bcc-7562-4b49-985d-7b36f4325b5c",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
-      "severity": "low",
-      "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Laptop is a device, not sensitive data.",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
       "bbox": [
         520,
         792,
         360,
         163
       ],
-      "requires_protection": false,
+      "requires_protection": true,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "80926d87-bb4e-4166-9576-36b44da570fc",
+      "detection_id": "55d20799-2030-41cd-9332-5843475fcaf4",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
-      "severity": "low",
-      "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Laptop is a device, not sensitive data.",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
       "bbox": [
         511,
         262,
         318,
         170
       ],
-      "requires_protection": false,
+      "requires_protection": true,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "4445ffeb-9b4f-4a9f-9c9e-57d75930cfca",
+      "detection_id": "65804203-f966-4d40-be37-28edbc9fd459",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
-      "severity": "low",
-      "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Laptop is a device, not sensitive data.",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
       "bbox": [
         150,
         264,
         357,
         182
       ],
-      "requires_protection": false,
+      "requires_protection": true,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "71fa759d-da82-4634-a955-36519fa13405",
+      "detection_id": "4611d861-92ff-4245-93c2-db43193d6a1d",
       "element_type": "object",
       "element_description": "Object: cell phone",
       "risk_type": "information_disclosure",
-      "severity": "low",
-      "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Cell phone is a device, not sensitive data.",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
       "bbox": [
         8,
         953,
         140,
         65
       ],
-      "requires_protection": false,
+      "requires_protection": true,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "42753043-1e1c-43aa-b521-ee6a00f36bff",
+      "detection_id": "436bb1d0-8d9d-4541-8fdc-66e5a1bd00f6",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
-      "severity": "low",
-      "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Laptop is a device, not sensitive data.",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
       "bbox": [
         8,
         952,
         141,
         67
       ],
-      "requires_protection": false,
+      "requires_protection": true,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "9c74a377-84f3-4fb2-9462-7af6b2b73ceb",
+      "detection_id": "416ac16c-acb0-446f-9fa8-17a950109c6d",
       "element_type": "object",
       "element_description": "Object: cell phone",
       "risk_type": "information_disclosure",
-      "severity": "low",
-      "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Cell phone is a device, not sensitive data.",
+      "severity": "critical",
+      "color_code": "#FF6600",
+      "reasoning": "Face near screen with visible content",
       "bbox": [
         843,
         404,
         77,
         28
       ],
-      "requires_protection": false,
+      "requires_protection": true,
       "consent_status": null,
       "consent_confidence": 0.0,
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "c8818dc6-405a-4530-ab17-88d89b858edb",
+      "detection_id": "8805f79c-264a-4164-a2e3-f3240ca51e0c",
       "element_type": "object",
       "element_description": "Object: book",
       "risk_type": "context_exposure",
