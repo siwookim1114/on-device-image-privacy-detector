@@ -15,7 +15,7 @@ import shutil
 import sys
 
 # Utils import
-from models import (
+from utils.models import (
     PrivacyProfile, PersonEntry, FaceEmbedding, ConsentHistory, ProvenanceLog, EthicalMode
 )
 
