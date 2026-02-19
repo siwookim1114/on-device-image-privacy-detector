@@ -1,51 +1,51 @@
-# Core dependencies
-torch>=2.0.0
-torchvision>=0.15.0
-numpy>=1.24.0
+# Standards
+torch==2.9.1
+torchvision==0.24.1
+numpy==2.4.2
 
 # Configuration
-pyyaml>=6.0
+PyYAML==6.0.2
 
-# Computer Vision
-opencv-python>=4.8.0
-Pillow>=10.0.0
+# Image Processing
+Pillow==12.1.0
+opencv-python-headless==4.11.0.86
 
-# Agents and LLM
-langchain>=0.3.0,<0.4.0
-langchain-core>=0.3.0,<1.0.0
-langchain-community>=0.3.0,<0.4.0
-langchain-ollama>=0.1.0
+# LangChain & LLM Agent Framework
+langchain==1.2.10
+langchain-core==1.2.13
+langchain-openai==1.1.10
+langchain-ollama==1.0.1
+langgraph==1.0.8
 
-# backends for Apple Silicon MPS
-mlx-vlm
-vllm-mlx
-langchain-openai
+# On-Device VLM Backends (Apple Silicon)
+mlx-vlm==0.3.12
+vllm-mlx==0.2.6
 
-# Face detection
-facenet-pytorch>=2.5.3
+# Face Detection & Recognition
+facenet-pytorch==2.5.3
 
-# OCR
-easyocr>=1.7.0
+# OCR (Text Detection)
+easyocr==1.7.2
 
-# Object detection
-paddlepaddle
-paddleocr
-einops 
-timm       
-transformers>=4.53.0
-# Data validation
-pydantic>=2.0.0
+# Object Detection (YOLO)
+ultralytics==8.4.0
 
-# Database
-pymongo>=4.6.0
-cryptography>=41.0.0
+# Vision Model Dependencies
+einops==0.8.2
+timm==1.0.24
+transformers==5.2.0
 
-# Logging
-loguru>=0.7.0
+# Data Validation
+pydantic==2.12.5
 
-# Progress bars
-tqdm>=4.65.0
-rich>=13.5.0
+# Database & Encryption
+pymongo==4.16.0
+cryptography==46.0.3
+
+# Logging & Progress
+loguru==0.7.3
+tqdm==4.67.1
+rich==14.2.0
 
 # Testing
-pytest>=7.4.0
+pytest==9.0.2
