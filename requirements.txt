@@ -16,6 +16,11 @@ langchain-core>=0.3.0,<1.0.0
 langchain-community>=0.3.0,<0.4.0
 langchain-ollama>=0.1.0
 
+# backends for Apple Silicon MPS
+mlx-vlm
+vllm-mlx
+langchain-openai
+
 # Face detection
 facenet-pytorch>=2.5.3
 
@@ -27,7 +32,7 @@ paddlepaddle
 paddleocr
 einops 
 timm       
-transformers==4.40.0
+transformers>=4.53.0
 # Data validation
 pydantic>=2.0.0
 

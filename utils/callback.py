@@ -1,51 +1,40 @@
 import re
+import sys
 from langchain_core.callbacks import BaseCallbackHandler
 
 
 class Phase2ReviewCallback(BaseCallbackHandler):
-    """Callback that prints concise VLM output during Phase 2 review.
+    """Callback that prints VLM output during Phase 2 review.
 
-    Shows only:
+    Shows:
+    - Streaming tokens as they arrive (for real-time visibility)
     - Tool calls (name + truncated args)
     - Tool results (truncated)
-    - VLM thinking (truncated summary)
-    - VLM text responses
     """
 
+    def __init__(self):
+        self._streaming = False
+
+    def on_llm_new_token(self, token: str, **kwargs):
+        """Print each token as it streams in."""
+        if token:
+            if not self._streaming:
+                print("\n  [VLM] ", end="", flush=True)
+                self._streaming = True
+            print(token, end="", flush=True)
+
     def on_llm_end(self, response, **kwargs):
-        """Print thinking summary and tool calls after each LLM generation."""
+        """Print tool calls after each LLM generation."""
+        if self._streaming:
+            print()  # newline after streamed tokens
+            self._streaming = False
+
         try:
             for gen_list in response.generations:
                 for gen in gen_list:
                     msg = getattr(gen, 'message', None)
                     if not msg:
                         continue
-
-                    # Show reasoning/thinking (truncated)
-                    extra = getattr(msg, 'additional_kwargs', {}) or {}
-                    reasoning = extra.get('reasoning_content', '')
-                    if reasoning and reasoning.strip():
-                        display = reasoning.strip()
-                        display = display[:300] + "..." if len(display) > 300 else display
-                        print(f"\n  [Thinking] {display}")
-
-                    # Show text content (not thinking blocks)
-                    content = (msg.content or "").strip()
-                    if content:
-                        # Strip <think> blocks
-                        think_match = re.search(r'<think>(.*?)</think>', content, re.DOTALL)
-                        if think_match:
-                            thinking = think_match.group(1).strip()
-                            visible = content[think_match.end():].strip()
-                            if thinking and not reasoning:
-                                display = thinking[:300] + "..." if len(thinking) > 300 else thinking
-                                print(f"\n  [Thinking] {display}")
-                            if visible:
-                                display = visible[:300] + "..." if len(visible) > 300 else visible
-                                print(f"  [VLM] {display}")
-                        else:
-                            display = content[:300] + "..." if len(content) > 300 else content
-                            print(f"\n  [VLM] {display}")
 
                     # Show tool calls
                     tool_calls = getattr(msg, 'tool_calls', None)

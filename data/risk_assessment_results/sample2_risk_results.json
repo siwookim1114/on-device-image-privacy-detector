@@ -1,7 +1,7 @@
 {
   "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample2.png",
   "overall_risk_level": "critical",
-  "processing_time_ms": 56560.24694442749,
+  "processing_time_ms": 8831.770896911621,
   "total_assessments": 2,
   "confirmed_risks": 1,
   "faces_pending_identity": 0,
@@ -13,7 +13,7 @@
   },
   "assessments": [
     {
-      "detection_id": "aac23e20-853a-4638-91b8-113fa1d98fa7",
+      "detection_id": "71a00793-1cf5-445d-9b48-8b6227753ef2",
       "element_type": "face",
       "element_description": "Face (medium, high clarity)",
       "risk_type": "identity_exposure",
@@ -32,13 +32,13 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "366748c9-f83b-4b21-897a-c69ff0068ee2",
+      "detection_id": "9c0b79f6-48d2-4375-b229-2196c55346f4",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
-      "severity": "low",
+      "severity": "medium",
       "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: Laptop screen is blank/neutral (no visible sensitive content), so device risk is low",
+      "reasoning": "Face near screen with visible content",
       "bbox": [
         81,
         314,

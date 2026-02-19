@@ -403,16 +403,35 @@ class PipelineOutput(BaseModel):
 class ReclassifyAssessmentInput(BaseModel):
     """Input schema for reclassify_assessment tool."""
     index: int = Field(description="Assessment index (0-based) from the assessment list")
-    new_severity: str = Field(description="New severity level: critical, high, medium, or low")
-    visual_reason: str = Field(description="Visual evidence from the image that justifies the change")
+    severity: str = Field(description="New severity level: critical, high, medium, or low")
+    reason: str = Field(default="VLM visual review", description="Why this change is needed")
+
+
+class ReclassifyItem(BaseModel):
+    """Single reclassification within a batch."""
+    index: int = Field(description="Assessment index (0-based)")
+    severity: str = Field(description="New severity: critical, high, medium, or low")
+    reason: str = Field(default="VLM visual review", description="Why this change is needed")
+
+
+class BatchReclassifyInput(BaseModel):
+    """Input schema for batch_reclassify tool."""
+    reclassifications: List[ReclassifyItem] = Field(
+        description="List of reclassifications to apply. Each has index, severity, and reason."
+    )
 
 
 class SplitPart(BaseModel):
     """Schema for a single part when splitting an assessment."""
     element_description: str = Field(description="Description of this part")
     severity: str = Field(description="Severity: critical, high, medium, or low")
-    requires_protection: bool = Field(description="Whether this part requires protection")
-    visual_reason: str = Field(description="Visual evidence for this classification")
+    requires_protection: bool = Field(default=None, description="Whether this part requires protection (auto-set from severity if omitted)")
+    visual_reason: str = Field(default="", description="Specific reason for this classification, e.g. 'Contains SSN digits' or 'Label text only, no actual data'")
+
+    def model_post_init(self, __context):
+        """Auto-derive requires_protection from severity if not explicitly set."""
+        if self.requires_protection is None:
+            self.requires_protection = self.severity.lower() in ("critical", "high")
 
 
 class SplitAssessmentInput(BaseModel):

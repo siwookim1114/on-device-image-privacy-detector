@@ -26,6 +26,8 @@ from utils.models import (
     ConsentStatus,
     PersonClassification,
     ReclassifyAssessmentInput,
+    ReclassifyItem,
+    BatchReclassifyInput,
     SplitPart,
     SplitAssessmentInput
 )
@@ -1126,9 +1128,9 @@ class ObjectRiskAssessmentTool(BaseTool):
         ObjectDetectionTool already classified objects into risk categories.
         """
 
-        # Screen devices with visible content
+        # Screen devices: default LOW, VLM Phase 2 can escalate if sensitive content visible
         if contains_screen or risk_category == "screen_device":
-            return RiskLevel.HIGH
+            return RiskLevel.LOW
         
         # Vehicles (licsense plate risk)
         if risk_category == "vehicle":
@@ -1637,6 +1639,7 @@ class ReclassifyAssessmentTool(BaseTool):
         "Actually changes the severity, color code, and protection status in-place."
     )
     args_schema: Type[BaseModel] = ReclassifyAssessmentInput
+    handle_tool_error: bool = True
     assessments: Any = None
     config: Any = None
 
@@ -1645,18 +1648,27 @@ class ReclassifyAssessmentTool(BaseTool):
         self.assessments = assessments
         self.config = config
 
-    def _run(self, index: int, new_severity: str, visual_reason: str) -> str:
+    def _run(self, index: int, severity: str, reason: str = "VLM visual review") -> str:
         """Reclassify an assessment's severity and update derived fields."""
         if index < 0 or index >= len(self.assessments):
             return json.dumps({"error": f"Invalid index {index}, valid range: 0-{len(self.assessments)-1}"})
 
-        new_severity_lower = new_severity.lower()
+        new_severity_lower = severity.lower()
         valid = {"critical", "high", "medium", "low"}
         if new_severity_lower not in valid:
-            return json.dumps({"error": f"Invalid severity '{new_severity}', must be one of: {sorted(valid)}"})
+            return json.dumps({"error": f"Invalid severity '{severity}', must be one of: {sorted(valid)}"})
 
         assessment = self.assessments[index]
         old_severity = assessment.get("severity", "low")
+
+        # No-op: already at target severity
+        if old_severity == new_severity_lower:
+            return json.dumps({
+                "status": "no_change",
+                "index": index,
+                "element": assessment.get("element_description", "?"),
+                "message": f"Already at severity '{new_severity_lower}'. Do NOT repeat this action."
+            })
 
         # Actually modify the assessment in-place
         assessment["severity"] = new_severity_lower
@@ -1665,19 +1677,19 @@ class ReclassifyAssessmentTool(BaseTool):
 
         # Update reasoning with VLM evidence
         original_reasoning = assessment.get("reasoning", "Tool-based assessment")
-        assessment["reasoning"] = f"{original_reasoning} -> VLM: {visual_reason}"
+        assessment["reasoning"] = f"{original_reasoning} -> VLM: {reason}"
 
         # Add VLM metadata to factors
         factors = assessment.get("factors", {})
         factors["vlm_reclassified"] = {
             "from": old_severity,
             "to": new_severity_lower,
-            "reason": visual_reason
+            "reason": reason
         }
         assessment["factors"] = factors
 
         print(f"    RECLASSIFY: [{index}] {assessment.get('element_description', '?')} "
-              f"{old_severity} -> {new_severity_lower} ({visual_reason})")
+              f"{old_severity} -> {new_severity_lower} ({reason})")
 
         return json.dumps({
             "status": "success",
@@ -1685,6 +1697,97 @@ class ReclassifyAssessmentTool(BaseTool):
             "element": assessment.get("element_description", "?"),
             "changed": f"{old_severity} -> {new_severity_lower}",
             "requires_protection": assessment["requires_protection"]
+        })
+
+
+class BatchReclassifyTool(BaseTool):
+    """Reclassify multiple assessments in a single call. Does not shift indices."""
+    name: str = "batch_reclassify"
+    description: str = (
+        "Reclassify the severity of MULTIPLE assessments at once. "
+        "Pass a list of reclassifications, each with index, severity, and reason. "
+        "This is more efficient than calling reclassify_assessment multiple times. "
+        "Does NOT shift indices (unlike split_assessment)."
+    )
+    args_schema: Type[BaseModel] = BatchReclassifyInput
+    handle_tool_error: bool = True
+    assessments: Any = None
+    config: Any = None
+
+    def __init__(self, assessments: List[Dict], config, **kwargs):
+        super().__init__(**kwargs)
+        self.assessments = assessments
+        self.config = config
+
+    def _run(self, reclassifications: List[Dict]) -> str:
+        """Apply multiple reclassifications in one call."""
+        valid_severities = {"critical", "high", "medium", "low"}
+        results = []
+
+        for item in reclassifications:
+            # Handle both dict and ReclassifyItem
+            if hasattr(item, 'index'):
+                index, severity, reason = item.index, item.severity, item.reason
+            else:
+                index = item.get("index", -1)
+                severity = item.get("severity", "")
+                reason = item.get("reason", "VLM visual review")
+
+            # Validate index
+            if index < 0 or index >= len(self.assessments):
+                results.append(f"[{index}] ERROR: invalid index (0-{len(self.assessments)-1})")
+                continue
+
+            new_severity = severity.lower()
+            if new_severity not in valid_severities:
+                results.append(f"[{index}] ERROR: invalid severity '{severity}'")
+                continue
+
+            assessment = self.assessments[index]
+            old_severity = assessment.get("severity", "low")
+
+            # Skip no-ops
+            if old_severity == new_severity:
+                results.append(f"[{index}] SKIP: already {new_severity}")
+                continue
+
+            # Guard: protect split-created value items from accidental downgrade
+            det_id = str(assessment.get("detection_id", ""))
+            desc = assessment.get("element_description", "")
+            if "_split_" in det_id and desc.startswith("Text value:"):
+                if new_severity in ("low", "medium") and old_severity in ("critical", "high"):
+                    results.append(
+                        f"[{index}] BLOCKED: '{desc}' is a split-created sensitive value. "
+                        f"Do NOT downgrade from {old_severity}."
+                    )
+                    continue
+
+            # Apply reclassification in-place
+            assessment["severity"] = new_severity
+            assessment["color_code"] = get_risk_color(self.config, new_severity)
+            assessment["requires_protection"] = new_severity in ("critical", "high")
+
+            original_reasoning = assessment.get("reasoning", "Tool-based assessment")
+            assessment["reasoning"] = f"{original_reasoning} -> VLM: {reason}"
+
+            factors = assessment.get("factors", {})
+            factors["vlm_reclassified"] = {
+                "from": old_severity,
+                "to": new_severity,
+                "reason": reason
+            }
+            assessment["factors"] = factors
+
+            desc = assessment.get("element_description", "?")
+            print(f"    RECLASSIFY: [{index}] {desc} {old_severity} -> {new_severity} ({reason})")
+            results.append(f"[{index}] {old_severity} -> {new_severity}")
+
+        return json.dumps({
+            "status": "success",
+            "applied": len([r for r in results if "->" in r]),
+            "skipped": len([r for r in results if "SKIP" in r]),
+            "errors": len([r for r in results if "ERROR" in r]),
+            "details": results
         })
 
 
@@ -1698,6 +1801,7 @@ class SplitAssessmentTool(BaseTool):
         "WARNING: This shifts all indices after the split point."
     )
     args_schema: Type[BaseModel] = SplitAssessmentInput
+    handle_tool_error: bool = True
     assessments: Any = None
     config: Any = None
     ocr_reader: Any = None
@@ -1835,6 +1939,27 @@ class SplitAssessmentTool(BaseTool):
                     }
         return None
 
+    def _spatial_split_bbox(self, original_bbox, num_parts, original_text=""):
+        """
+        Split bbox proportionally based on text content.
+        For "Label: Value" patterns, estimate split point from colon position.
+        Fallback: equal width division.
+        """
+        ox, oy, ow, oh = original_bbox
+
+        if num_parts == 2 and ":" in original_text:
+            colon_pos = original_text.index(":")
+            ratio = (colon_pos + 1) / max(len(original_text), 1)
+            ratio = max(0.2, min(ratio, 0.6))
+            split_x = int(ox + ow * ratio)
+            return [
+                [ox, oy, split_x - ox, oh],
+                [split_x, oy, ox + ow - split_x, oh]
+            ]
+
+        part_w = ow // max(num_parts, 1)
+        return [[ox + i * part_w, oy, part_w, oh] for i in range(num_parts)]
+
     def _run(self, index: int, parts: List[Dict]) -> str:
         """Split an assessment into multiple parts and replace in the list."""
         if index < 0 or index >= len(self.assessments):
@@ -1843,7 +1968,39 @@ class SplitAssessmentTool(BaseTool):
             return json.dumps({"error": "Need at least 2 parts for a split"})
 
         original = self.assessments[index]
+
+        # Guard: only text assessments should be split
+        if original.get("element_type") != "text":
+            return json.dumps({
+                "error": f"Cannot split {original.get('element_type', 'unknown')} assessment. "
+                         f"Only text assessments can be split. Use reclassify_assessment instead."
+            })
+
+        # Guard: block cascading splits (items already created by a previous split)
         original_id = original.get("detection_id", "unknown")
+        if "_split_" in str(original_id):
+            return json.dumps({
+                "error": f"Item [{index}] was already created by a previous split. "
+                         f"Do NOT re-split. Only split original Phase 1 items."
+            })
+
+        # Guard: only split text that contains a "Label: Value" or "Label:Value" pattern
+        # (colon followed by meaningful text/digits after it)
+        desc = original.get("element_description", "")
+        # Strip "Text: " prefix to get raw content
+        raw_text = desc
+        for prefix in ["Text: ", "Text label: ", "Text value: "]:
+            if raw_text.startswith(prefix):
+                raw_text = raw_text[len(prefix):]
+                break
+        # Check for "Label: Value" (with space) or "Label:Digits" (no space, digits after colon)
+        has_colon_space = ": " in raw_text and len(raw_text.split(": ", 1)[1].strip()) >= 2
+        has_colon_digits = bool(re.search(r':\s*\d{2,}', raw_text))  # colon + optional space + 2+ digits
+        if not has_colon_space and not has_colon_digits:
+            return json.dumps({
+                "error": f"Item [{index}] '{desc}' is not a composite 'Label: Value' text. "
+                         f"Use batch_reclassify to change its severity instead."
+            })
         original_bbox = original.get("bbox", [0, 0, 0, 0])
 
         # Convert parts for processing
@@ -1853,21 +2010,41 @@ class SplitAssessmentTool(BaseTool):
                 part = part.model_dump()
             processed_parts.append(part)
 
-        # Get precise sub-bboxes via OCR re-crop
+        # Get precise sub-bboxes via OCR re-crop, with spatial split fallback
+        original_text = original.get("element_description", "").replace("Text: ", "", 1)
         part_descriptions = [
             p.get("element_description", original.get("element_description", ""))
             for p in processed_parts
         ]
         sub_bboxes = self._ocr_recrop_bboxes(original_bbox, part_descriptions)
 
+        # If OCR matching failed (all bboxes same as original), use spatial split
+        all_same = all(b == list(original_bbox) for b in sub_bboxes)
+        if all_same:
+            sub_bboxes = self._spatial_split_bbox(
+                original_bbox, len(processed_parts), original_text
+            )
+
         new_parts = []
         for j, part in enumerate(processed_parts):
             new_assessment = dict(original)
             new_assessment["detection_id"] = f"{original_id}_split_{j}"
-            new_assessment["element_description"] = part.get(
-                "element_description", original.get("element_description", "Unknown"))
 
+            desc = part.get("element_description", original.get("element_description", "Unknown"))
             new_sev = part.get("severity", original.get("severity", "low")).lower()
+
+            # Normalize description: ensure consistent "Text label:" / "Text value:" prefix
+            # Handle VLM-provided "Label: X" / "Value: X" → convert to "Text label: X" / "Text value: X"
+            if desc.startswith("Label: "):
+                desc = f"Text label: {desc[7:]}"
+            elif desc.startswith("Value: "):
+                desc = f"Text value: {desc[7:]}"
+            elif not any(desc.startswith(p) for p in ["Text label: ", "Text value: ", "Text: "]):
+                if new_sev in ("critical", "high"):
+                    desc = f"Text value: {desc}"
+                else:
+                    desc = f"Text label: {desc}"
+            new_assessment["element_description"] = desc
             new_assessment["severity"] = new_sev
             new_assessment["color_code"] = get_risk_color(self.config, new_sev)
             new_assessment["requires_protection"] = part.get(
@@ -1876,8 +2053,13 @@ class SplitAssessmentTool(BaseTool):
             # Assign precise sub-bbox from OCR re-crop
             new_assessment["bbox"] = sub_bboxes[j]
 
-            visual_reason = part.get("visual_reason", "VLM split")
-            new_assessment["reasoning"] = f"VLM split: {visual_reason}"
+            visual_reason = part.get("visual_reason", "")
+            if not visual_reason or visual_reason.lower() == "vlm split":
+                if new_sev in ("critical", "high"):
+                    visual_reason = "Sensitive value requiring protection"
+                else:
+                    visual_reason = "Label/context only, low risk"
+            new_assessment["reasoning"] = f"VLM review: {visual_reason}"
 
             factors = new_assessment.get("factors", {})
             factors["vlm_split"] = {
@@ -1907,7 +2089,10 @@ class SplitAssessmentTool(BaseTool):
             "new_count": len(new_parts),
             "total_assessments": len(self.assessments),
             "bbox_precision": bbox_info,
-            "note": "Indices after the split point have shifted. Call get_current_assessments to see updated indices."
+            "new_indices": {
+                descriptions[i]: index + i for i in range(len(new_parts))
+            },
+            "note": f"Indices {index+len(new_parts)} onwards have shifted by {len(new_parts)-1}."
         })
 
 
@@ -1918,6 +2103,7 @@ class GetCurrentAssessmentsTool(BaseTool):
         "Get the current state of all assessments with their indices. "
         "Call this after splits to see updated indices, or at any time to review."
     )
+    handle_tool_error: bool = True
     assessments: Any = None
 
     def __init__(self, assessments: List[Dict], **kwargs):
@@ -1925,35 +2111,41 @@ class GetCurrentAssessmentsTool(BaseTool):
         self.assessments = assessments
 
     def _run(self, tool_input: str = "") -> str:
-        """Return summary of all current assessments."""
-        summary = []
+        """Return compact summary of all current assessments."""
+        lines = []
         for i, a in enumerate(self.assessments):
-            summary.append({
-                "index": i,
-                "element_type": a.get("element_type", "unknown"),
-                "element_description": a.get("element_description", "?"),
-                "severity": a.get("severity", "low"),
-                "requires_protection": a.get("requires_protection", False)
-            })
-        return json.dumps({"assessments": summary, "total": len(self.assessments)})
+            lines.append(
+                f"[{i}] {a.get('element_type', '?')} | "
+                f"{a.get('element_description', '?')} | "
+                f"{a.get('severity', 'low')}"
+            )
+        return f"Total: {len(self.assessments)}\n" + "\n".join(lines)
 
 
 class ValidateAssessmentsTool(BaseTool):
-    """Validate consistency across all assessments."""
+    """Validate and finalize all assessments."""
     name: str = "validate_assessments"
     description: str = (
-        "Validate consistency of all current assessments. "
-        "Ensures severity levels match protection requirements. "
-        "Call this after making reclassifications."
+        "Validate and finalize all assessments. "
+        "Ensures severity levels match protection requirements, then finalizes the review. "
+        "Call this ONCE after all reclassifications and splits are done."
     )
+    handle_tool_error: bool = True
     assessments: Any = None
+    already_validated: bool = False
 
     def __init__(self, assessments: List[Dict], **kwargs):
         super().__init__(**kwargs)
         self.assessments = assessments
 
     def _run(self, tool_input: str = "") -> str:
-        """Fix consistency: critical/high must require protection, low must not."""
+        """Fix consistency and finalize: critical/high must require protection, low must not."""
+        if self.already_validated:
+            return json.dumps({
+                "status": "already_finalized",
+                "message": "Already validated and finalized. Do NOT call any more tools."
+            })
+
         corrections = 0
         for a in self.assessments:
             sev = a.get("severity", "low")
@@ -1964,36 +2156,22 @@ class ValidateAssessmentsTool(BaseTool):
             if sev == "low" and prot:
                 a["requires_protection"] = False
                 corrections += 1
+
+        self.already_validated = True
+
+        # Auto-finalize: generate summary
+        summary = {"critical": 0, "high": 0, "medium": 0, "low": 0, "requiring_protection": 0}
+        for a in self.assessments:
+            sev = a.get("severity", "low").lower()
+            if sev in summary:
+                summary[sev] += 1
+            if a.get("requires_protection", False):
+                summary["requiring_protection"] += 1
+
         return json.dumps({
-            "status": "validated",
+            "status": "validated_and_finalized",
             "corrections": corrections,
-            "total_assessments": len(self.assessments)
-        })
-
-
-class FinalizeReviewTool(BaseTool):
-    """Signal that the VLM review is complete."""
-    name: str = "finalize_review"
-    description: str = (
-        "Call this when you have finished reviewing all assessments and are satisfied. "
-        "This signals that the review is complete."
-    )
-    assessments: Any = None
-
-    def __init__(self, assessments: List[Dict], **kwargs):
-        super().__init__(**kwargs)
-        self.assessments = assessments
-
-    def _run(self, tool_input: str = "") -> str:
-        """Return final summary of all assessments."""
-        return json.dumps({
-            "status": "finalized",
             "total_assessments": len(self.assessments),
-            "summary": {
-                "critical": sum(1 for a in self.assessments if a.get("severity") == "critical"),
-                "high": sum(1 for a in self.assessments if a.get("severity") == "high"),
-                "medium": sum(1 for a in self.assessments if a.get("severity") == "medium"),
-                "low": sum(1 for a in self.assessments if a.get("severity") == "low"),
-                "requiring_protection": sum(1 for a in self.assessments if a.get("requires_protection"))
-            }
+            "summary": summary,
+            "message": "Review complete. Do NOT call any more tools."
         })

@@ -3,9 +3,10 @@ import json
 from PIL import Image
 from typing import List, Dict, Optional
 import easyocr
-from langchain.agents import AgentExecutor, create_tool_calling_agent
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import HumanMessage
+from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
+from langgraph.errors import GraphRecursionError
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from utils.models import (
     DetectionResults,
@@ -18,7 +19,6 @@ from utils.models import (
 )
 from agents.local_wrapper import VisionLLM
 from utils.config import get_risk_color
-from utils.callback import Phase2ReviewCallback
 from agents.tools import (
     FaceRiskAssessmentTool,
     TextRiskAssessmentTool,
@@ -28,11 +28,10 @@ from agents.tools import (
     RiskEscalationTool,
     FalsePositiveFilterTool,
     ConsistencyValidationTool,
-    ReclassifyAssessmentTool,
+    BatchReclassifyTool,
     SplitAssessmentTool,
     GetCurrentAssessmentsTool,
     ValidateAssessmentsTool,
-    FinalizeReviewTool
 )
 
 
@@ -44,9 +43,10 @@ class RiskAssessmentAgent:
         - Runs face/text/object risk tools in fixed order
         - Spatial analysis, escalation, filtering, validation
 
-    Phase 2: Agentic VLM review with tool calling 
+    Phase 2: LangGraph agent review with VLM tool calling
         - VLM sees annotated image + Phase 1 assessments
-        - Tool-calling agent dynamically calls tools to reclassify, split, validate
+        - LangGraph create_react_agent dynamically calls tools
+        - Pre-model hook trims messages to prevent context overflow
         - Tools modify assessments in-place
     """
 
@@ -54,7 +54,8 @@ class RiskAssessmentAgent:
         self,
         config,
         privacy_profile: Optional[PrivacyProfile] = None,
-        reasoning_mode: str = "balanced"
+        reasoning_mode: str = "balanced",
+        vlm_backend: str = "llama-cpp"
     ):
         """
         Initialize the Two-Phase Risk Assessment Agent.
@@ -66,16 +67,30 @@ class RiskAssessmentAgent:
                 - fast: Phase 1 only (no VLM review)
                 - balanced: Phase 1 + VLM review (default)
                 - thorough: Phase 1 + VLM review with more iterations
+            vlm_backend: "mlx" | "llama-cpp" | "ollama"
+                - mlx: Use vllm-mlx server (default, fastest on Apple Silicon)
+                - llama-cpp: Use llama-server
+                - ollama: Use Ollama server
         """
         self.config = config
         self.privacy_profile = privacy_profile if privacy_profile else PrivacyProfile()
         self.reasoning_mode = reasoning_mode
+        self.vlm_backend = vlm_backend
         self.vlm_model = self._get_vlm_model()
+
+        # Backend-specific config
+        backend_config = {
+            "llama-cpp": {"base_url": "http://localhost:8080"},
+            "ollama": {"base_url": "http://localhost:11434"},
+            "mlx": {"base_url": "http://localhost:8000"},
+        }
+        base_url = backend_config.get(vlm_backend, backend_config["mlx"])["base_url"]
 
         # VLM for Phase 2 agentic review
         self.vlm = VisionLLM(
             model=self.vlm_model,
-            base_url="http://localhost:11434"
+            base_url=base_url,
+            backend=vlm_backend
         )
 
         # Phase 1 deterministic tools
@@ -83,7 +98,7 @@ class RiskAssessmentAgent:
 
         print(f"\n[RiskAssessmentAgent] Initialized")
         print(f"  Phase 1: Deterministic tool-based assessment")
-        print(f"  Phase 2: Agentic VLM review (model: {self.vlm_model})")
+        print(f"  Phase 2: LangGraph agent review (model: {self.vlm_model}, backend: {self.vlm_backend})")
         print(f"  Reasoning Mode: {self.reasoning_mode}")
         print(f"  Privacy Mode: {self.privacy_profile.default_mode}")
         print(f"  Phase 1 Tools: {len(self.tools)}")
@@ -91,13 +106,27 @@ class RiskAssessmentAgent:
             print(f"    - {t.name}")
 
     def _get_vlm_model(self) -> str:
-        """Select VLM model based on reasoning mode."""
-        mode_to_model = {
-            "fast": "llama3.2-vision:11b",
-            "balanced": "qwen3-vl:30b-a3b-thinking",
-            "thorough": "qwen3-vl:30b-a3b-thinking"
-        }
-        return mode_to_model.get(self.reasoning_mode, "llama3.2-vision:11b")
+        """Select VLM model based on reasoning mode and backend."""
+        if self.vlm_backend == "llama-cpp":
+            # llama-server serves a single model; name must match what server reports
+            mode_to_model = {
+                "fast": "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf",
+                "balanced": "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf",
+                "thorough": "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf"
+            }
+        elif self.vlm_backend == "mlx":
+            mode_to_model = {
+                "fast": "mlx-community/Qwen3-VL-8B-Instruct-4bit",
+                "balanced": "./Qwen3-VL-30B-A3B-Thinking-4bit",
+                "thorough": "./Qwen3-VL-30B-A3B-Thinking-4bit"
+            }
+        else:  # ollama
+            mode_to_model = {
+                "fast": "llama3.2-vision:11b",
+                "balanced": "qwen3-vl:30b-a3b-thinking",
+                "thorough": "qwen3-vl:30b-a3b-thinking"
+            }
+        return mode_to_model.get(self.reasoning_mode, mode_to_model["balanced"])
 
     def _get_tools(self, assessments: Optional[List[Dict]] = None, image_path: str = None) -> List:
         """
@@ -140,7 +169,7 @@ class RiskAssessmentAgent:
                     self._ocr_reader = None
 
             tools.extend([
-                ReclassifyAssessmentTool(assessments=assessments, config=self.config),
+                BatchReclassifyTool(assessments=assessments, config=self.config),
                 SplitAssessmentTool(
                     assessments=assessments,
                     config=self.config,
@@ -149,7 +178,6 @@ class RiskAssessmentAgent:
                 ),
                 GetCurrentAssessmentsTool(assessments=assessments),
                 ValidateAssessmentsTool(assessments=assessments),
-                FinalizeReviewTool(assessments=assessments),
             ])
 
         return tools
@@ -298,14 +326,14 @@ class RiskAssessmentAgent:
         assessments: List[Dict],
         annotated_image: Image.Image,
         image_path: str = None
-    ) -> AgentExecutor:
+    ):
         """
-        Build the Phase 2 tool-calling agent with multimodal prompt.
+        Build the Phase 2 LangGraph agent with multimodal input.
 
-        Creates:
-        1. Phase 2 review tools (from tools.py) that modify assessments in-place
-        2. Multimodal prompt with annotated image + Phase 1 assessment summary
-        3. Tool-calling agent + AgentExecutor
+        Uses langchain's create_agent with middleware:
+        - MessageTrimMiddleware: trims old messages, keeps image + recent context
+        - ModelCallLimitMiddleware: caps iterations to prevent runaway loops
+        - Tools modify assessments in-place
 
         Args:
             assessments: Phase 1 assessment dicts (tools will modify these in-place)
@@ -313,12 +341,19 @@ class RiskAssessmentAgent:
             image_path: Path to original image (for OCR re-crop in split tool)
 
         Returns:
-            AgentExecutor with tools bound
+            Tuple of (compiled_agent, image_b64, max_iters)
         """
         # Create all tools with assessments bound, then extract Phase 2 tools
-        # Phase 1 tools = indices 0-7, Phase 2 tools = indices 8+
         all_tools = self._get_tools(assessments, image_path=image_path)
-        phase2_tools = all_tools[len(self.tools):]  # Everything after Phase 1
+        phase2_tools = all_tools[len(self.tools):]
+
+        # Resize image to reduce vision token usage
+        max_dim = 768
+        w, h = annotated_image.size
+        if max(w, h) > max_dim:
+            scale = max_dim / max(w, h)
+            new_w, new_h = int(w * scale), int(h * scale)
+            annotated_image = annotated_image.resize((new_w, new_h), Image.LANCZOS)
 
         # Encode image for multimodal prompt
         image_b64 = self.vlm._image_to_base64(annotated_image)
@@ -329,82 +364,68 @@ class RiskAssessmentAgent:
         else:  # balanced
             max_iters = max(10, min(len(assessments), 15))
 
-        # Build multimodal prompt:
-        #   - System: guidelines + Phase 1 assessments (via {input})
-        #   - HumanMessage: annotated image (concrete, multimodal)
-        #   - agent_scratchpad: tool call history (managed by AgentExecutor)
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system",
-                "You are a senior visual privacy risk assessment reviewer expert in reviewing risks inside an image.\n\n"
-                "You are looking at an annotated image with colored bounding boxes:\n"
-                "- RED boxes: detected faces\n"
-                "- GREEN boxes: detected text regions\n"
-                "- BLUE boxes: detected objects\n\n"
-                "Phase 1 (deterministic tools) produced these risk assessments:\n"
-                "{input}\n\n"
-
-                "Your job: visually verify each assessment against the image and correct mistakes.\n\n"
-                "Process:\n"
-                "1. Call get_current_assessments first to see all items with their current indices.\n"
-                "2. Review each item one at a time against what you see in the image.\n"
-                "3. Use reclassify_assessment for incorrect severity.\n"
-                "4. Use split_assessment for composite text (label + value in one block). If you use split_assessment tool, ALWAYS call get_current_assessments sequentially to check the updated indices.\n"
-                "5. Call validate_assessments after all changes.\n"
-                "6. Call finalize_review ONLY after reviewing ALL assessments.\n\n"
-
-                "CRITICAL RULES:\n"
-                "- After split_assessment, indices shift. You MUST call get_current_assessments "
-                "to see updated indices before making any further changes.\n"
-                "- After finalize_review, do NOT call any more tools. Just output a text summary like "
-                "'Review complete.' to end the session.\n\n"
-
-                "Severity guidelines:\n"
-                "- Faces without consent: keep CRITICAL\n"
-                "- Text labels only ('Password:', 'Bank Account:', 'Social Security'): should be LOW\n"
-                "- Text with actual corresponding sensitive values ('4821', '238-49-6521'): should be CRITICAL\n"
-                "- Composite label+value in one block ('PIN: 4821'): split into label (low) + value (critical)\n"
-                "- Devices: only keep HIGH/CRITICAL if you can read sensitive content on the screen. "
-                "If the screen is blank, shows wallpaper, or the device faces away, reclassify to LOW\n\n"
-                "Review ALL assessments before calling finalize_review."
-            ),
-            HumanMessage(content=[
-                {"type": "text", "text": (
-                    "Here is the annotated image. Review each assessment against what you see. "
-                    "Call finalize_review when done."
-                )},
-                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{image_b64}"}
-            ]),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ])
-
-        # Create tool calling agent (native structured tool calls, no text parsing)
-        agent = create_tool_calling_agent(
-            llm=self.vlm.llm,
-            tools=phase2_tools,
-            prompt=prompt
+        system_prompt = (
+            "You are a visual privacy risk reviewer. Verify EVERY Phase 1 assessment against the image.\n\n"
+            "WORKFLOW (follow strictly in this order):\n"
+            "1. SPLIT composites FIRST: Items marked COMPOSITE(split) contain 'Label: Value' — "
+            "call split_assessment for each one. After each split, indices shift.\n"
+            "2. REFRESH: Call get_current_assessments to see updated indices after splits.\n"
+            "3. RECLASSIFY: Call batch_reclassify ONCE with ALL severity corrections.\n"
+            "4. VALIDATE: Call validate_assessments ONCE after all corrections.\n\n"
+            "SEVERITY RULES:\n"
+            "- Faces with consent=none → CRITICAL (NEVER downgrade)\n"
+            "- Label-only text (no real data after colon): '#:', 'Password:', 'Account:' → LOW\n"
+            "- Actual sensitive values (numbers, SSNs, PINs) → CRITICAL\n"
+            "- COMPOSITE text ('PIN: 4821', 'Bank Account: 8765') → SPLIT, not reclassify\n"
+            "- Devices (laptop, phone): LOW unless sensitive content visible on screen\n\n"
+            "CRITICAL RULE — SPLIT vs RECLASSIFY:\n"
+            "- If text has 'Label: ActualData' (data after colon) → SPLIT into label(low) + value(critical)\n"
+            "- If text is label-only (nothing meaningful after colon) → reclassify to LOW\n"
+            "- Example: 'PIN: 4821' → SPLIT. '#:' → reclassify LOW.\n"
+            "- Do NOT reclassify composites to LOW — that loses the sensitive value.\n\n"
+            "IMPORTANT:\n"
+            "- Items marked COMPOSITE(split) MUST be split, not reclassified.\n"
+            "- Items already starting with 'Text label:' or 'Text value:' are already split — skip.\n"
+            "- After split_assessment, indices shift. Use new_indices from the response.\n"
+            "- Be concise between tool calls."
         )
 
-        agent_executor = AgentExecutor(
-            agent=agent,
+        # Middleware: trim old messages to prevent context overflow.
+        # Keeps the first message (image + assessments) and last 12 messages
+        # (6 tool call/result pairs). The model only sees trimmed messages;
+        # state retains the full history.
+        class MessageTrimMiddleware(AgentMiddleware):
+            def wrap_model_call(self, request, handler):
+                messages = request.messages
+                if len(messages) > 14:
+                    trimmed = [messages[0]] + messages[-12:]
+                    return handler(request.override(messages=trimmed))
+                return handler(request)
+
+        agent = create_agent(
+            model=self.vlm.llm,
             tools=phase2_tools,
-            verbose=True,
-            max_iterations=max_iters,
-            return_intermediate_steps=True,
-            callbacks=[Phase2ReviewCallback()],
-            handle_parsing_errors=True
+            system_prompt=system_prompt,
+            middleware=[
+                MessageTrimMiddleware(),
+                ModelCallLimitMiddleware(run_limit=max_iters),
+            ],
         )
 
-        print(f"  Phase 2 agent built:")
+        print(f"  Phase 2 LangGraph agent built:")
         print(f"    LLM: {self.vlm_model}")
         print(f"    Max iterations: {max_iters}")
         print(f"    Tools: {[t.name for t in phase2_tools]}")
 
-        return agent_executor
+        return agent, image_b64, max_iters
     
 
     def _build_assessment_summary(self, assessments: List[Dict]) -> str:
-        """Format Phase 1 assessments as text for the VLM review prompt."""
+        """Format Phase 1 assessments as text for the VLM review prompt.
+
+        Includes consent_status for faces and contains_screen for objects
+        so the VLM has enough context to make correct severity decisions.
+        """
         lines = []
         for i, a in enumerate(assessments):
             bbox_raw = a.get("bbox", [0, 0, 0, 0])
@@ -413,13 +434,45 @@ class RiskAssessmentAgent:
             else:
                 bbox_display = str(bbox_raw)
 
-            lines.append(
-                f"[{i}] {a.get('element_type', '?')} | "
-                f"{a.get('element_description', '?')} | "
-                f"severity={a.get('severity', '?')} | "
-                f"protection={a.get('requires_protection', False)} | "
-                f"bbox={bbox_display}"
-            )
+            parts = [
+                f"[{i}] {a.get('element_type', '?')}",
+                a.get('element_description', '?'),
+                f"severity={a.get('severity', '?')}",
+            ]
+
+            # Faces: include consent status so VLM knows not to downgrade
+            if a.get('element_type') == 'face':
+                consent = a.get('consent_status', 'unknown')
+                if hasattr(consent, 'value'):
+                    consent = consent.value
+                parts.append(f"consent={consent}")
+
+            # Text: detect composite "Label: Value" patterns for VLM guidance
+            if a.get('element_type') == 'text':
+                import re as _re
+                desc_text = a.get('element_description', '')
+                raw = desc_text
+                for prefix in ["Text: ", "Text label: ", "Text value: "]:
+                    if raw.startswith(prefix):
+                        raw = raw[len(prefix):]
+                        break
+                # Check "Label: Value" (with space) or "Label:Digits" (no space)
+                has_colon_space = ": " in raw and len(raw.split(": ", 1)[1].strip()) >= 2
+                has_colon_digits = bool(_re.search(r':\s*\d{2,}', raw))
+                if has_colon_space or has_colon_digits:
+                    parts.append("COMPOSITE(split)")
+                elif raw.endswith(":") or raw.endswith(": ") or (": " in raw and len(raw.split(": ", 1)[1].strip()) < 2):
+                    parts.append("label_only")
+
+            # Objects: flag screen devices so VLM can escalate if needed
+            if a.get('element_type') == 'object':
+                has_screen = a.get('factors', {}).get('contains_screen',
+                             a.get('contains_screen', False))
+                if has_screen:
+                    parts.append("screen_device")
+
+            parts.append(f"bbox={bbox_display}")
+            lines.append(" | ".join(parts))
         return "\n".join(lines)
 
     def _vlm_agent_review(
@@ -429,34 +482,59 @@ class RiskAssessmentAgent:
         image_path: str = None
     ) -> List[Dict]:
         """
-        Phase 2: Run the agentic VLM review.
+        Phase 2: Run the LangGraph agent review.
 
-        Builds the tool-calling agent via _build_agent, runs it, and returns
-        the modified assessments. On any error, returns Phase 1 assessments unchanged.
+        Builds the agent via _build_agent, invokes it with the image and
+        assessment summary as a multimodal HumanMessage. The agent calls
+        tools that modify assessments in-place.
         """
         print(f"\n{'-'*60}")
-        print(f"Phase 2: Agentic VLM Review")
+        print(f"Phase 2: LangGraph Agent Review")
         print(f"{'-'*60}")
 
         try:
             # Build Phase 2 agent
-            agent_executor = self._build_agent(assessments, annotated_image, image_path=image_path)
+            agent, image_b64, max_iters = self._build_agent(
+                assessments, annotated_image, image_path=image_path
+            )
 
-            # Run the agent (assessments are modified in-place by tools)
-            print(f"  Starting VLM agent review ({len(assessments)} assessments)...")
+            # Build input message with image + assessment summary
             assessment_summary = self._build_assessment_summary(assessments)
-            result = agent_executor.invoke({"input": assessment_summary})
+            input_message = HumanMessage(content=[
+                {"type": "text", "text": f"Assessments to review:\n{assessment_summary}"},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            ])
 
-            # Log what the agent did
-            steps = result.get("intermediate_steps", [])
-            tool_calls = [action.tool for action, _ in steps]
-            print(f"  VLM agent made {len(steps)} tool calls: {tool_calls}")
+            print(f"  Starting VLM agent review ({len(assessments)} assessments)...")
+
+            # ModelCallLimitMiddleware handles graceful stop.
+            # recursion_limit is a hard safety net above the middleware limit.
+            result = agent.invoke(
+                {"messages": [input_message]},
+                config={"recursion_limit": 2 * max_iters + 5},
+            )
+
+            # Extract tool calls from the full message history
+            tool_calls = []
+            for msg in result["messages"]:
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        tool_calls.append(tc["name"])
+
+            print(f"  VLM agent made {len(tool_calls)} tool calls: {tool_calls}")
             print(f"  Phase 2 complete: {len(assessments)} assessments after review")
 
             return assessments  # Modified in-place by tools
 
+        except GraphRecursionError:
+            print(f"  VLM agent hit max iterations ({max_iters})")
+            print(f"  Returning assessments as modified so far")
+            return assessments
+
         except Exception as e:
             print(f"  VLM agent review failed: {e}")
+            import traceback
+            traceback.print_exc()
             print(f"  Keeping Phase 1 results unchanged")
             return assessments
 

@@ -1,29 +1,67 @@
 import base64
-import requests
 from io import BytesIO
 from PIL import Image
 from typing import Optional
 from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 
 
 class VisionLLM:
     """
-    Thin wrapper around ChatOllama for vision tasks
-    Maintains current image state and injects it into LLM calls
+    Thin wrapper around local VLM backends for vision tasks.
+    Supports llama-cpp (llama-server), MLX (vllm-mlx), and Ollama backends.
+    Maintains current image state and injects it into LLM calls.
     """
-    def __init__(self, model: str = "llava-phi3", base_url: str = "http://localhost:11434"):
-        # Enable reasoning capture for thinking models
+    def __init__(
+        self,
+        model: str = None,
+        base_url: str = None,
+        backend: str = None,
+    ):
+        self.backend = backend
         is_thinking = "thinking" in model.lower()
-        self.llm = ChatOllama(
-            model=model,
-            temperature=0,
-            base_url=base_url,
-            reasoning=True if is_thinking else None,
-        )
+
+        if backend == "llama-cpp":
+            # llama-server (llama.cpp) serves OpenAI-compatible API
+            # Supports VLM + native tool calling via --jinja
+            api_base = base_url.rstrip("/")
+            if not api_base.endswith("/v1"):
+                api_base += "/v1"
+            self.llm = ChatOpenAI(
+                model=model,
+                base_url=api_base,
+                api_key="not-needed",
+                temperature=0,
+                streaming=True,
+            )
+            print(f"Initialized llama-server VLM: {model}")
+            print(f"Make sure llama-server is running at {base_url}")
+        elif backend == "mlx":
+            # vllm-mlx serves OpenAI-compatible API
+            api_base = base_url.rstrip("/")
+            if not api_base.endswith("/v1"):
+                api_base += "/v1"
+            self.llm = ChatOpenAI(
+                model=model,
+                base_url=api_base,
+                api_key="not-needed",
+                temperature=0,
+                streaming=True,
+            )
+            print(f"Initialized MLX VLM: {model}")
+            print(f"Make sure vllm-mlx is serving at {base_url}")
+        else:  # ollama
+            self.llm = ChatOllama(
+                model=model,
+                temperature=0,
+                base_url=base_url,
+                reasoning=True if is_thinking else None,
+            )
+            print(f"Initialized Ollama VLM: {model}")
+            print(f"Make sure the model is pulled: ollama pull {model}")
+
         self.current_image: Optional[Image.Image] = None
-        print(f"Initialized Ollama VLM: {model}")
-        print(f"Make sure the model is pulled: ollama pull {model}")
 
     def set_image(self, image: Image.Image):
         """Set current image for analysis"""
@@ -54,10 +92,10 @@ class VisionLLM:
                 {"type": "text", "text": prompt},
                 {
                     "type": "image_url",
-                    "image_url": f"data:image/jpeg;base64,{image_b64}"
+                    "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
                 }
             ]
         )
-        
+
         response = self.llm.invoke([message])
         return response.content

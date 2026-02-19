@@ -68,6 +68,9 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 
+# llama.cpp (built from source)
+llama.cpp/
+
 # Environment
 .env
 .env.local

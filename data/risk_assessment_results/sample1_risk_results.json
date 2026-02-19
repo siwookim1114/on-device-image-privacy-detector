@@ -1,7 +1,7 @@
 {
   "image_path": "/Users/rlatldn20001114/on-device-image-privacy-detector/data/test_images/sample1.png",
   "overall_risk_level": "critical",
-  "processing_time_ms": 271591.2208557129,
+  "processing_time_ms": 29182.28578567505,
   "total_assessments": 15,
   "confirmed_risks": 5,
   "faces_pending_identity": 0,
@@ -13,7 +13,7 @@
   },
   "assessments": [
     {
-      "detection_id": "3b0b1e5e-a85e-49d9-bceb-68ad459a32dc",
+      "detection_id": "91202fab-bf70-4daf-8eb9-e8ed6ce62719",
       "element_type": "face",
       "element_description": "Face (medium, high clarity)",
       "risk_type": "identity_exposure",
@@ -32,7 +32,7 @@
       "user_sensitivity_applied": "bystander_faces"
     },
     {
-      "detection_id": "b1bb649a-b066-4701-b927-d9bdc0b78172",
+      "detection_id": "8c0c069c-cba7-46c8-aa10-2f67d23cca92",
       "element_type": "text",
       "element_description": "Text: Social Security",
       "risk_type": "information_disclosure",
@@ -51,13 +51,13 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "0cf2ae93-4c96-4525-9636-553a1710fd9e",
+      "detection_id": "9255fc25-e76b-4dac-a8f0-9641c0e8f969",
       "element_type": "text",
       "element_description": "Text: #:",
       "risk_type": "information_disclosure",
       "severity": "low",
       "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: The text ' #:' is a label for the Social Security number, not sensitive data itself.",
+      "reasoning": "Tool-based assessment -> VLM: Label-only text '#:' with no actual data after colon",
       "bbox": [
         486,
         1176,
@@ -70,7 +70,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "0a0e23b1-379a-41d5-8758-6adda46eb4d6",
+      "detection_id": "caf85437-870c-4c21-869b-fd6cdfc7e934",
       "element_type": "text",
       "element_description": "Text: 238-49-6521",
       "risk_type": "information_disclosure",
@@ -89,18 +89,18 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "b6c1b3a0-0ca4-4ece-adf5-639a27518733_split_0",
+      "detection_id": "e693b60b-1072-46b1-890f-bffd91bebe0a_split_0",
       "element_type": "text",
-      "element_description": "Bank Account:",
+      "element_description": "Text label: Bank Account",
       "risk_type": "information_disclosure",
       "severity": "low",
       "color_code": "#90EE90",
-      "reasoning": "VLM split: This is a label for the bank account number.",
+      "reasoning": "VLM review: Label text only, no actual data",
       "bbox": [
-        315,
-        1305,
-        137,
-        40
+        226,
+        1310,
+        86,
+        38
       ],
       "requires_protection": false,
       "consent_status": null,
@@ -108,13 +108,13 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "b6c1b3a0-0ca4-4ece-adf5-639a27518733_split_1",
+      "detection_id": "e693b60b-1072-46b1-890f-bffd91bebe0a_split_1",
       "element_type": "text",
-      "element_description": "8765 4321 0987",
+      "element_description": "Text value: 8765 4321 0987",
       "risk_type": "information_disclosure",
       "severity": "critical",
       "color_code": "#FF0000",
-      "reasoning": "VLM split: This is a sensitive bank account number.",
+      "reasoning": "VLM review: Contains actual bank account number",
       "bbox": [
         456,
         1300,
@@ -127,18 +127,18 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "6fe6830c-5880-49ba-9786-7a4702bcb8a2_split_0",
+      "detection_id": "eebecf76-d4c5-46e4-8f89-cddc3d158622_split_0",
       "element_type": "text",
-      "element_description": "PIN:",
+      "element_description": "Text label: PIN",
       "risk_type": "information_disclosure",
       "severity": "low",
       "color_code": "#90EE90",
-      "reasoning": "VLM split: This is a label for the PIN.",
+      "reasoning": "VLM review: Label text only, no actual data",
       "bbox": [
-        231,
-        1369,
-        86,
-        44
+        229,
+        1356,
+        216,
+        60
       ],
       "requires_protection": false,
       "consent_status": null,
@@ -146,13 +146,13 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "6fe6830c-5880-49ba-9786-7a4702bcb8a2_split_1",
+      "detection_id": "eebecf76-d4c5-46e4-8f89-cddc3d158622_split_1",
       "element_type": "text",
-      "element_description": "4821",
+      "element_description": "Text value: 4821",
       "risk_type": "information_disclosure",
       "severity": "critical",
       "color_code": "#FF0000",
-      "reasoning": "VLM split: This is a sensitive PIN value.",
+      "reasoning": "VLM review: Contains actual PIN",
       "bbox": [
         324,
         1358,
@@ -165,7 +165,7 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "e6341203-4488-436b-9f1d-43155a026f50",
+      "detection_id": "d6287313-10c9-423c-aa78-56a0fee7ce1b",
       "element_type": "text",
       "element_description": "Text: Password:",
       "risk_type": "information_disclosure",
@@ -184,7 +184,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "6b60c8de-eeb1-47bc-bb42-1f3e78cf2815",
+      "detection_id": "17ccd37c-3b1e-455c-9175-83e17eb39d8e",
       "element_type": "text",
       "element_description": "Text: Magicl231",
       "risk_type": "information_disclosure",
@@ -203,13 +203,13 @@
       "user_sensitivity_applied": "critical"
     },
     {
-      "detection_id": "9c46ec59-f799-445a-8159-8b46a5bf8a07",
+      "detection_id": "e75bda51-9441-4776-9fab-5117e8ba34d3",
       "element_type": "object",
       "element_description": "Object: laptop",
       "risk_type": "information_disclosure",
       "severity": "low",
       "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: The laptop screen is not visible; no sensitive data is displayed on the screen.",
+      "reasoning": "Tool-based assessment",
       "bbox": [
         0,
         727,
@@ -222,13 +222,13 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "e8440cac-4e07-44cb-a5eb-bc75cb46eec9",
+      "detection_id": "101d70fe-4c6d-4c2e-a627-2a31d1cdf5bf",
       "element_type": "object",
       "element_description": "Object: cell phone",
       "risk_type": "information_disclosure",
       "severity": "low",
       "color_code": "#90EE90",
-      "reasoning": "Tool-based assessment -> VLM: The cell phone screen is not visible; no sensitive data is displayed on the screen.",
+      "reasoning": "Tool-based assessment",
       "bbox": [
         0,
         1100,
@@ -241,7 +241,7 @@
       "user_sensitivity_applied": "high"
     },
     {
-      "detection_id": "5c7670f0-4bde-41f0-ba94-ee62f89bc106",
+      "detection_id": "8bb6886e-2649-40d5-b0c3-951eb78ff1e3",
       "element_type": "object",
       "element_description": "Object: book",
       "risk_type": "context_exposure",
@@ -260,7 +260,7 @@
       "user_sensitivity_applied": "medium"
     },
     {
-      "detection_id": "adc5fbd0-9577-4e37-8b91-0b18791db009",
+      "detection_id": "a69da92d-51a8-4905-820a-0e23f977c3b4",
       "element_type": "object",
       "element_description": "Object: book",
       "risk_type": "context_exposure",
@@ -279,7 +279,7 @@
       "user_sensitivity_applied": "medium"
     },
     {
-      "detection_id": "d0f0d7c1-3f0a-40cd-a69e-d75a7dba454e",
+      "detection_id": "07893c9a-eabf-44e7-9d29-10dd80c2ae1a",
       "element_type": "object",
       "element_description": "Object: book",
       "risk_type": "context_exposure",
