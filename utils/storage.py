@@ -179,6 +179,23 @@ class FaceDatabase:
         arr = np.frombuffer(data, dtype=np.float32)
         return arr.tolist()
     
+    def add_embedding_to_person(self, person_id: str, embedding: List[float], source_image: str):
+        """Insert a new embedding document directly into MongoDB"""
+        try:
+            doc = {
+                "person_id": person_id,
+                "embedding": self.serialize_embedding(embedding),
+                "source_image": source_image,
+                "timestamp": datetime.now()
+            }
+            self.embeddings.insert_one(doc)
+            print(f"Added person embedding to : {person_id}")
+            return True
+        
+        except Exception as e:
+            print(f"Failed to add person: {e}")
+            return False
+    
     def add_person(self, person: PersonEntry) -> bool:
         """
         Add a new person to the database

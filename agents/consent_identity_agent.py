@@ -123,6 +123,7 @@ class ConsentIdentityAgent:
         self._cache_dirty = False
     
     # Core Pipeline
+
     def run(self, detections: DetectionResults, risk_result: RiskAnalysisResult) -> RiskAnalysisResult:
         """
         Main consent identity pipeline.
@@ -204,6 +205,8 @@ class ConsentIdentityAgent:
 
         self._print_summary(risk_result, start_time)
         return risk_result
+    
+    # Face Matching
     
     def _match_face(self, query: np.ndarray, detection_id: str) -> IdentityMatch:
         """
@@ -287,7 +290,206 @@ class ConsentIdentityAgent:
             ethical_risk="high",
             risk_adjustment="severity_unchanged",
           )
-
-
     
+    def _classify_person(self, person: PersonEntry) -> PersonClassification:
+        """Classify based on stored relationship."""
+        if person.relationship == "self":
+            return PersonClassification.PRIMARY_SUBJECT
+        elif person.relationship in ("family", "friend", "colleague"):
+            return PersonClassification.KNOWN_CONTACT
+        else:
+            return PersonClassification.BYSTANDER
+    
+    def _determine_consent(self, person: PersonEntry, classification: PersonClassification) -> ConsentStatus:
+        """Determine consent from identity and approval history"""
+        if classification == PersonClassification.PRIMARY_SUBJECT:
+            return ConsentStatus.EXPLICIT
+        
+        if classification == PersonClassification.KNOWN_CONTACT:  
+            h = person.consent_history
+            trusted = (
+                h.times_appeared >= self.min_appearances_for_trust
+                and h.approval_rate >= self.trust_approval_threshold
+            )
+            return ConsentStatus.ASSUMED if trusted else ConsentStatus.UNCLEAR
+        
+        return ConsentStatus.NONE
+    
+    def get_risk_adjustment(self, classification: PersonClassification, consent_status: ConsentStatus, person: PersonEntry) -> str:
+        """Compute risk adjustment string."""
+        if classification == PersonClassification.PRIMARY_SUBJECT:
+            return "severity_reduced_to_low"
+        
+        if classification == PersonClassification.KNOWN_CONTACT:
+            if consent_status == ConsentStatus.ASSUMED:
+                key = {
+                    "family": "family_faces",
+                    "friend": "friend_faces",
+                    "colleague": "friend_faces"
+                }.get(person.relationship, "bystander_faces")
+                sensitivity = self.privacy_profile.identity_sensitivity.get(
+                    key, "medium"
+                )
+                return f"severity_reduced_to_{sensitivity}"
+            return "severity_reduced_to_high"
+        return "severity_unchanged"
+    
+    # Risk Application
+    
+    def _apply_identity(self, assessment: RiskAssessment, match: IdentityMatch):
+        """Apply identity match to a risk assessment in-place."""
+        assessment.person_id = match.person_id
+        assessment.person_label = match.person_label
+        assessment.classification = match.classification
+        assessment.consent_status = match.consent_status
+        assessment.consent_confidence = match.consent_confidence
+
+        if match.classification == PersonClassification.PRIMARY_SUBJECT:
+            assessment.severity = RiskLevel.LOW
+            assessment.requires_protection = False
+            assessment.reasoning = (
+                f"Identified as user ({match.person_label})"
+            )
+        
+        elif match.classification == PersonClassification.KNOWN_CONTACT:
+            if match.consent_status == ConsentStatus.ASSUMED:
+                # Parse target severity from risk_adjustment
+                target = match.risk_adjustment.replace(
+                    "severity_reduced_to_", ""
+                )
+                sev_map = {
+                    "critical": RiskLevel.CRITICAL,
+                    "high": RiskLevel.HIGH,
+                    "medium": RiskLevel.MEDIUM,
+                    "low": RiskLevel.LOW
+                }
+                assessment.severity = sev_map.get(target, RiskLevel.MEDIUM)
+                assessment.requires_protection = assessment.severity in (RiskLevel.CRITICAL, RiskLevel.HIGH)
+                rate = match.history.approval_rate if match.history else 0
+                assessment.reasoning = (
+                    f"Known contact ({match.person_label}), "
+                    f"trusted (approval rate: {rate:.0%})"
+                )
+            else:
+                assessment.severity = RiskLevel.HIGH
+                assessment.requires_protection = True
+                assessment.reasoning = (
+                    f"Known contact ({match.person_label}), "
+                    f"not yet trusted"
+                )
+        
+        # BYSTANDER: no changes - severity stays CRITICAL from Phase1
+
+    # Appearance Tracking
+
+    def _track_appearance(self, match: IdentityMatch, query_embedding: np.ndarray):
+        """Update appearance count and optionally add diverse embedding."""
+        person = self.face_db.get_person(match.person_id)
+        if person is None:
+            return
+        
+        person.consent_history.times_appeared += 1
+        person.last_seen = datetime.now()
+        self.face_db.update_person(person)
+
+        # Add embedding if diverse enough and under max limit
+        if len(person.embeddings) < self.max_embeddings:
+            q_norm = query_embedding / (
+                np.linalg.norm(query_embedding) + 1e-8
+            )
+            is_diverse = True
+            for existing in person.embeddings:
+                e_arr = np.array(existing.embedding, dtype = np.float32)
+                e_norm = e_arr / (np.linalg.norm(e_arr) + 1e-8)
+                if float(np.dot(q_norm, e_norm)) >= 0.95:
+                    is_diverse = False
+                    break
+            
+            if is_diverse:
+                self.face_db.add_embedding_to_person(
+                    person.person_id,
+                    query_embedding.tolist(),
+                    source_image="pipeline_detection"
+                )
+                self._cache_dirty = True
+                self._refresh_cache()
+
+    # Registration
+
+    def register_user_face(self, image_path: str, label: str = "Me") -> Optional[str]:
+        """
+        Register the user's own face.
+
+        Detects face in image, extracts embeddings, stores in MongoDB with relationship = "self".
+
+        Returns:
+            person_id if successful, None otherwise
+        """
+        return self._register_face(image_path, label, relationship = label)
+    
+    def register_contact(self, image_path: str, label: str, relationship: str = "friend") -> Optional[str]:
+        """
+        Register a known contact's face.
+
+        Args:
+            image_path: Path to image containing contact's face
+            label: Display label (e.g.,"Mom", "John", etc)
+            relationship: "family", "friend", or "colleague"
+        
+        Returns:
+            person_id if successful, None otherwise
+        """
+        return self._register_face(image_path, label, relationship)
+    
+    def _register_face(self, image_path: str, label: str, relationship: str) -> Optional[str]:
+        """Core registration: detect face -> extract embedding -> store."""
+        face_tool = self._get_face_tool()
+        result = face_tool._run(image_path)
+        data = json.loads(result)
+
+        if "error" in data or not data.get("faces"):
+            print(f"Registration failed: no face in {image_path}")
+            return None
+        
+        face_data = data["faces"][0]
+        embedding = face_data.get("embedding")
+        if embedding is None:
+            print(f"Registration failed: no embedding extracted")
+            return None
+        
+        person = PersonEntry(
+            label = label,
+            relationship = relationship,
+            embeddings = [FaceEmbedding(embedding = embedding, source_image = image_path)],
+            consent_history = ConsentHistory(
+                times_appeared = 1 if relationship == "self" else 0,
+                times_approved = 1 if relationship == "self" else 0
+            ),
+            risk_decay_factor = 0.0 if relationship == "self" else 1.0
+        )
+        success = self.face_db.add_person(person)
+        if success:
+            self._cache_dirty = True
+            self._refresh_cache()
+            print(
+                f"Registered: {label} ({relationship})"
+                f" → {person.person_id}"
+            )
+            return person.person_id
+        return None
+    
+    
+    
+        
+
+
+
+
+
+
+
+
+
+        
+
 
