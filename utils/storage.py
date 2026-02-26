@@ -189,11 +189,11 @@ class FaceDatabase:
                 "timestamp": datetime.now()
             }
             self.embeddings.insert_one(doc)
-            print(f"Added person embedding to : {person_id}")
+            print(f"Added person embedding to: {person_id}")
             return True
         
         except Exception as e:
-            print(f"Failed to add person: {e}")
+            print(f"Failed to add embedding: {e}")
             return False
     
     def add_person(self, person: PersonEntry) -> bool:

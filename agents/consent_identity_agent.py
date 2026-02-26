@@ -315,7 +315,7 @@ class ConsentIdentityAgent:
         
         return ConsentStatus.NONE
     
-    def get_risk_adjustment(self, classification: PersonClassification, consent_status: ConsentStatus, person: PersonEntry) -> str:
+    def _get_risk_adjustment(self, classification: PersonClassification, consent_status: ConsentStatus, person: PersonEntry) -> str:
         """Compute risk adjustment string."""
         if classification == PersonClassification.PRIMARY_SUBJECT:
             return "severity_reduced_to_low"
@@ -391,6 +391,8 @@ class ConsentIdentityAgent:
         person.consent_history.times_appeared += 1
         person.last_seen = datetime.now()
         self.face_db.update_person(person)
+        self._cache_dirty = True
+        self._refresh_cache()
 
         # Add embedding if diverse enough and under max limit
         if len(person.embeddings) < self.max_embeddings:
@@ -425,7 +427,7 @@ class ConsentIdentityAgent:
         Returns:
             person_id if successful, None otherwise
         """
-        return self._register_face(image_path, label, relationship = label)
+        return self._register_face(image_path, label, relationship="self")
     
     def register_contact(self, image_path: str, label: str, relationship: str = "friend") -> Optional[str]:
         """
@@ -478,9 +480,114 @@ class ConsentIdentityAgent:
             return person.person_id
         return None
     
-    
-    
+    # Adaptive Learning
+
+    def record_user_decision(self, person_id: str, decision: str, context: str = "user_review"): 
+        """
+        Record user's decision for adaptive learning
+
+        Args:
+            person_id: Person's unique decision for adaptive learning.
+            decision: "approved" or "protected"
+            context: e.g., "user_review", "social_media"
+        """
+        if not self.learning_enabled:
+            return
         
+        person = self.face_db.get_person(person_id)
+        if person is None:
+            print(f"Person {person_id} not found")
+            return
+        
+        h = person.consent_history
+        if decision == "approved":
+            h.times_approved += 1
+            h.last_consent_decision = "approved" 
+            person.risk_decay_factor = max(
+                0.0, person.risk_decay_factor - self.risk_decay_per_approval
+            )
+        
+        elif decision == "protected":
+            h.times_protected += 1
+            h.last_consent_decision = "protected"
+            person.risk_decay_factor = min(
+                2.0,
+                person.risk_decay_factor + self.risk_increase_per_protection,
+            )
+        
+        if h.times_appeared > 0:
+            h.consent_confidence = h.approval_rate
+        if context not in h.contexts:
+            h.contexts.append(context)
+        
+        self.face_db.update_person(person)
+        print(
+            f"Decision recorded for {person.label}: {decision} "
+            f"(approval rate: {h.approval_rate:.0%})"
+        )
+    
+    def _calculate_overall_risk(self, assessments: List[RiskAssessment]) -> RiskLevel:
+        """Recalculate overall risk after identity adjustments."""
+        if not assessments:
+            return RiskLevel.LOW
+        
+        critical = sum(1 for a in assessments if a.severity == RiskLevel.CRITICAL)
+        high = sum(1 for a in assessments if a.severity == RiskLevel.HIGH)
+        medium = sum(1 for a in assessments if a.severity == RiskLevel.MEDIUM)
+        if critical > 0:
+            return RiskLevel.CRITICAL
+        elif high >= 2:
+            return RiskLevel.CRITICAL
+        elif high >= 1:
+            return RiskLevel.HIGH
+        elif medium >= 3:
+            return RiskLevel.HIGH
+        elif medium >= 1:
+            return RiskLevel.MEDIUM
+        return RiskLevel.LOW
+    
+    def _print_summary(self, result: RiskAnalysisResult, start_time: float):
+        """Print identity resolution summary."""
+        elapsed = (time.time() - start_time) * 1000
+        print(f"\n{'='*60}")
+        print(f"Consent Identity Complete")
+        print(f"{'='*60}")
+        print(f"  Processing time: {elapsed:.2f}ms")
+        print(f"  Overall risk: {result.overall_risk_level.value.upper()}")
+        print(f"  Faces pending identity: {result.faces_pending_identity}")
+        print(f"  Confirmed risks: {result.confirmed_risks}")
+        for a in result.risk_assessments:
+            if a.element_type == "face":
+                label = a.person_label or "Unknown"
+                cls = (
+                    a.classification.value
+                    if a.classification
+                    else "bystander"
+                )
+                consent = (
+                    a.consent_status.value
+                    if hasattr(a.consent_status, "value")
+                    else a.consent_status
+                )
+                print(
+                    f"    Face [{a.detection_id[:8]}]: {label} → "
+                    f"{cls}, consent={consent}, "
+                    f"severity={a.severity.value}"
+                )
+        print(f"{'='*60}\n")
+
+    def close(self):
+        """Close database connection."""
+        if self.face_db:
+            self.face_db.close()
+
+
+        
+        
+    
+
+            
+                
 
 
 
