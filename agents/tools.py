@@ -663,7 +663,7 @@ class TextDetectionTool(BaseTool):
         try:
             image = Image.open(image_path)
             img_array = np.array(image)
-            results = self.detector.readtext(img_array, width_ths=0.7, paragraph=False)
+            results = self.detector.readtext(img_array, width_ths=0.7, low_text=0.3, paragraph=False)
             texts = []
 
             for idx, detection in enumerate(results):

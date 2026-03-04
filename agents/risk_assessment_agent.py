@@ -481,11 +481,15 @@ class RiskAssessmentAgent:
             # Classify value part by running it through the text risk assessment pipeline:
             # create a minimal text dict to get a risk assessment
             value_clean = re.sub(r'[\s\-]', '', value_part)
+            label_lower = label_part.lower().strip()
             is_critical = bool(
                 re.match(r'^\d{3}-?\d{2}-?\d{4}$', value_part)  # SSN
                 or re.match(r'^\d{13,19}$', value_clean)  # Credit card
                 or (re.match(r'^\d[\d\s\-]{8,}$', value_part) and len(value_clean) >= 8)  # Account number
-                or (label_part.lower().strip() in ("pin", "password", "cvv", "secret"))
+                or label_lower in ("pin", "password", "cvv", "secret")
+                # Label indicates critical data — trust the label even if OCR misread digits
+                or any(kw in label_lower for kw in ("bank account", "account", "credit card",
+                       "social security", "ssn", "routing"))
             )
             is_pii = is_critical or bool(re.search(r'\d{4,}', value_part))
             # Use the original assessment's factors to determine type
