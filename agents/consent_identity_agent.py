@@ -35,6 +35,7 @@ from utils.models import (
     ConsentStatus
 )
 from utils.storage import FaceDatabase
+from utils.config import get_risk_color
 from agents.tools import FaceDetectionTool
 
 class ConsentIdentityAgent:
@@ -346,11 +347,12 @@ class ConsentIdentityAgent:
 
         if match.classification == PersonClassification.PRIMARY_SUBJECT:
             assessment.severity = RiskLevel.LOW
+            assessment.color_code = get_risk_color(self.config, "low")
             assessment.requires_protection = False
             assessment.reasoning = (
                 f"Identified as user ({match.person_label})"
             )
-        
+
         elif match.classification == PersonClassification.KNOWN_CONTACT:
             if match.consent_status == ConsentStatus.ASSUMED:
                 # Parse target severity from risk_adjustment
@@ -364,6 +366,9 @@ class ConsentIdentityAgent:
                     "low": RiskLevel.LOW
                 }
                 assessment.severity = sev_map.get(target, RiskLevel.MEDIUM)
+                assessment.color_code = get_risk_color(
+                    self.config, assessment.severity.value
+                )
                 assessment.requires_protection = assessment.severity in (RiskLevel.CRITICAL, RiskLevel.HIGH)
                 rate = match.history.approval_rate if match.history else 0
                 assessment.reasoning = (
@@ -372,12 +377,13 @@ class ConsentIdentityAgent:
                 )
             else:
                 assessment.severity = RiskLevel.HIGH
+                assessment.color_code = get_risk_color(self.config, "high")
                 assessment.requires_protection = True
                 assessment.reasoning = (
                     f"Known contact ({match.person_label}), "
                     f"not yet trusted"
                 )
-        
+
         # BYSTANDER: no changes - severity stays CRITICAL from Phase1
 
     # Appearance Tracking

@@ -2,16 +2,16 @@
 # Start llama-server for Phase 2 VLM risk assessment
 # Uses llama.cpp with native tool calling via --jinja
 
-PORT=8080
-LLAMA_SERVER="./llama.cpp/build/bin/llama-server"
-MODEL="./models/Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf"
-MMPROJ="./models/mmproj-Qwen3VL-30B-A3B-Instruct-F16.gguf"
+PORT=8081
+LLAMA_SERVER="./backend-engines/llama.cpp/build/bin/llama-server"
+MODEL="./backend-engines/models/Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf"
+MMPROJ="./backend-engines/models/mmproj-Qwen3VL-30B-A3B-Instruct-F16.gguf"
 
 # Check if llama-server binary exists
 if [ ! -f "$LLAMA_SERVER" ]; then
     echo "llama-server not found at $LLAMA_SERVER"
     echo "Build first:"
-    echo "  cd llama.cpp"
+    echo "  cd backend-engines/llama.cpp"
     echo "  cmake -B build -DGGML_METAL=ON"
     echo "  cmake --build build --config Release -j\$(sysctl -n hw.ncpu)"
     exit 1
@@ -21,14 +21,14 @@ fi
 if [ ! -f "$MODEL" ]; then
     echo "Model not found at $MODEL"
     echo "Download first:"
-    echo "  huggingface-cli download Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf --local-dir ./models"
+    echo "  huggingface-cli download Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf --local-dir ./backend-engines/models"
     exit 1
 fi
 
 if [ ! -f "$MMPROJ" ]; then
     echo "Vision projector not found at $MMPROJ"
     echo "Download first:"
-    echo "  huggingface-cli download Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF mmproj-Qwen3VL-30B-A3B-Instruct-F16.gguf --local-dir ./models"
+    echo "  huggingface-cli download Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF mmproj-Qwen3VL-30B-A3B-Instruct-F16.gguf --local-dir ./backend-engines/models"
     exit 1
 fi
 
@@ -47,6 +47,9 @@ echo "  Features: Vision + Tool Calling (--jinja)"
 echo "  GPU: Metal (all layers offloaded)"
 echo "  Stop with: Ctrl+C"
 echo ""
+
+# Library path needed because binary was built at a different location
+export DYLD_LIBRARY_PATH="./backend-engines/llama.cpp/build/bin:$DYLD_LIBRARY_PATH"
 
 $LLAMA_SERVER --jinja --flash-attn on \
   -m "$MODEL" \

@@ -14,6 +14,7 @@ sys.path.insert(0, str(project_root))
 
 from utils.config import load_config
 from utils.models import RiskLevel, PrivacyProfile
+from utils.visualization import export_risk_results_json, generate_risk_map
 from agents.detection_agent import DetectionAgent
 from agents.risk_assessment_agent import RiskAssessmentAgent
 
@@ -57,46 +58,6 @@ def print_risk_summary(result):
             print(f"       Protection: {protection} | Consent: {assessment.consent_status}")
             print(f"       Reasoning: {assessment.reasoning[:80]}...")
             print()
-
-
-def save_risk_results_json(result, detections, output_path: str):
-    """Save risk assessment results as JSON."""
-    results = {
-        "image_path": result.image_path,
-        "overall_risk_level": result.overall_risk_level.value,
-        "processing_time_ms": result.processimg_time_ms,
-        "total_assessments": len(result.risk_assessments),
-        "confirmed_risks": result.confirmed_risks,
-        "faces_pending_identity": result.faces_pending_identity,
-        "detection_summary": {
-            "faces": len(detections.faces),
-            "text_regions": len(detections.text_regions),
-            "objects": len(detections.objects),
-            "total": detections.total_detections
-        },
-        "assessments": [
-            {
-                "detection_id": a.detection_id,
-                "element_type": a.element_type,
-                "element_description": a.element_description,
-                "risk_type": a.risk_type.value,
-                "severity": a.severity.value,
-                "color_code": a.color_code,
-                "reasoning": a.reasoning,
-                "bbox": a.bbox.to_list(),
-                "requires_protection": a.requires_protection,
-                "consent_status": a.consent_status.value if a.consent_status else None,
-                "consent_confidence": a.consent_confidence,
-                "user_sensitivity_applied": a.user_sensitivity_applied
-            }
-            for a in result.risk_assessments
-        ]
-    }
-
-    with open(output_path, 'w') as f:
-        json.dump(results, f, indent=2)
-
-    print(f"  Results saved: {output_path}")
 
 
 def test_risk_assessment_pipeline(
@@ -234,7 +195,11 @@ def test_risk_assessment_pipeline(
             # Save results
             if save_json:
                 json_path = output_dir / f"{image_path.stem}_risk_results.json"
-                save_risk_results_json(risk_result, detections, str(json_path))
+                export_risk_results_json(risk_result, detections=detections, output_path=str(json_path))
+
+                # Generate visual risk map
+                risk_map_path = output_dir / f"{image_path.stem}_risk_map.png"
+                generate_risk_map(risk_result, str(image_path), output_path=str(risk_map_path))
 
             results_summary.append({
                 "image": image_path.name,

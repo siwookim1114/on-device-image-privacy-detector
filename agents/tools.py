@@ -296,6 +296,12 @@ class TextDetectionTool(BaseTool):
         """
         text_clean = text.strip()
 
+        # Normalize common OCR misreads: _ often misread from ":"
+        # Trailing: "PIN_" → "PIN:"
+        # Mid-text: "PIN_ 3902" → "PIN: 3902" (underscore followed by space+data)
+        text_clean = re.sub(r'[_]+\s*$', ':', text_clean)
+        text_clean = re.sub(r'[_]+\s+', ': ', text_clean)
+
         # ----- CRITICAL: Social Security Number (actual digits) -----
         if re.search(r'\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b', text_clean):
             return {
@@ -427,6 +433,17 @@ class TextDetectionTool(BaseTool):
                 "is_label_only": False
             }
 
+        # ----- Numeric fragments: isolated 3-8 digit numbers or partial numeric PII patterns -----
+        # These could be fragments of SSN, PIN, account numbers split by OCR
+        if re.match(r'^\d{3,8}$', text_clean) or re.match(r'^\d{2,3}-\d{2,4}$', text_clean):
+            return {
+                "type": "numeric_fragment",
+                "is_sensitive": True,
+                "is_pii": False,
+                "is_critical": False,
+                "is_label_only": False
+            }
+
         # ----- Default: General Text -----
         return {
             "type": "general_text",
@@ -472,8 +489,8 @@ class TextDetectionTool(BaseTool):
             value_type, is_critical = propagation
 
             for text in texts:
-                # Only propagate to unclassified general text that isn't a label
-                if text["text_type"] != "general_text" or text.get("is_label_only", False):
+                # Propagate to unclassified general text or numeric fragments (likely PII values)
+                if text["text_type"] not in ("general_text", "numeric_fragment") or text.get("is_label_only", False):
                     continue
 
                 # Skip known label words that OCR split from their parent label
@@ -491,12 +508,152 @@ class TextDetectionTool(BaseTool):
                 if text_clean in LABEL_WORDS:
                     continue
 
-                # Check spatial proximity (threshold: 200 pixels center-to-center)
-                if self._bbox_distance(label["bbox"], text["bbox"]) < 200:
+                # Check spatial proximity
+                # Use tighter vertical threshold (same row) with wider horizontal reach
+                # to handle text spread across the same line in grid images
+                dist = self._bbox_distance(label["bbox"], text["bbox"])
+                label_cy = label["bbox"][1] + label["bbox"][3] / 2
+                text_cy = text["bbox"][1] + text["bbox"][3] / 2
+                vertical_dist = abs(label_cy - text_cy)
+
+                # Same row (within 50px vertically): allow 400px horizontal distance
+                # Different row: use standard 200px threshold
+                threshold = 400 if vertical_dist < 50 else 200
+
+                if dist < threshold:
                     text["text_type"] = value_type
                     text["is_pii"] = True
                     text["is_critical"] = is_critical
                     text["is_sensitive"] = True
+
+    def _find_missing_values(self, texts: List[Dict], image_path: str) -> List[Dict]:
+        """
+        Third pass: find values near labels that have no nearby classified value.
+
+        When OCR detects a label like "PIN:" but misses the value next to it,
+        re-crop the region to the right of the label and run OCR to recover
+        the missing value.
+
+        Returns:
+            List of new text dicts to append to the texts list.
+        """
+        LABEL_TO_VALUE = {
+            "password_label": ("password", True),
+            "bank_label": ("bank_account", True),
+            "ssn_label": ("ssn", True),
+            "credit_card_label": ("credit_card", True),
+        }
+
+        labels = [t for t in texts
+                  if t.get("is_label_only", False) and t["text_type"] in LABEL_TO_VALUE]
+        if not labels:
+            return []
+
+        # Find labels that have no nearby classified value
+        labels_without_values = []
+        for label in labels:
+            has_value = False
+            for t in texts:
+                if t is label or t.get("is_label_only", False):
+                    continue
+                if not (t.get("is_pii", False) or t.get("is_critical", False)):
+                    continue
+                label_cy = label["bbox"][1] + label["bbox"][3] / 2
+                text_cy = t["bbox"][1] + t["bbox"][3] / 2
+                dist = self._bbox_distance(label["bbox"], t["bbox"])
+                threshold = 400 if abs(label_cy - text_cy) < 50 else 200
+                if dist < threshold:
+                    has_value = True
+                    break
+            if not has_value:
+                labels_without_values.append(label)
+
+        if not labels_without_values:
+            return []
+
+        try:
+            image = Image.open(image_path)
+            img_w, img_h = image.size
+        except Exception:
+            return []
+
+        LABEL_WORDS = {
+            "bank", "account", "social", "security", "credit", "card",
+            "password", "pin", "routing", "number", "ssn", "iban",
+        }
+
+        new_texts = []
+        next_id = len(texts)
+
+        for label in labels_without_values:
+            lx, ly, lw, lh = label["bbox"]
+
+            # Search region: to the right of the label, padded vertically
+            search_x = lx + lw
+            search_y = max(0, ly - int(lh * 0.5))
+            search_x2 = min(search_x + lw * 4, img_w)
+            search_y2 = min(search_y + lh * 2, img_h)
+
+            if search_x2 - search_x < 15 or search_y2 - search_y < 10:
+                continue
+
+            try:
+                crop = image.crop((search_x, search_y, search_x2, search_y2))
+                crop_array = np.array(crop)
+
+                ocr_results = self.detector.readtext(
+                    crop_array, width_ths=0.1, paragraph=False
+                )
+
+                for (box_pts, text_content, conf) in ocr_results:
+                    if conf < 0.25 or len(text_content.strip()) < 2:
+                        continue
+
+                    # Skip label words
+                    clean = re.sub(r'[:\s\-_.,;]', '', text_content).lower()
+                    if clean in LABEL_WORDS:
+                        continue
+
+                    # Convert local coords back to image coords
+                    pts = np.array(box_pts)
+                    min_x = int(pts[:, 0].min()) + search_x
+                    min_y = int(pts[:, 1].min()) + search_y
+                    max_x = int(pts[:, 0].max()) + search_x
+                    max_y = int(pts[:, 1].max()) + search_y
+                    new_bbox = [min_x, min_y, max_x - min_x, max_y - min_y]
+
+                    # Check for overlap with existing detections
+                    overlaps = False
+                    for existing in texts + new_texts:
+                        ex, ey, ew, eh = existing["bbox"]
+                        if (min_x < ex + ew and max_x > ex and
+                                min_y < ey + eh and max_y > ey):
+                            overlaps = True
+                            break
+                    if overlaps:
+                        continue
+
+                    value_type, is_critical = LABEL_TO_VALUE[label["text_type"]]
+
+                    new_texts.append({
+                        "id": f"text_recrop_{next_id}",
+                        "text_content": text_content,
+                        "bbox": new_bbox,
+                        "confidence": float(conf),
+                        "text_type": value_type,
+                        "is_sensitive": True,
+                        "is_pii": True,
+                        "is_critical": is_critical,
+                        "is_label_only": False,
+                    })
+                    next_id += 1
+                    print(f"    RECROP: Found '{text_content}' near "
+                          f"'{label.get('text_content', '')}' → {value_type}")
+
+            except Exception as e:
+                print(f"    RECROP ERROR near '{label.get('text_content', '')}': {e}")
+
+        return new_texts
 
     def _run(self, image_path: str) -> str:
         """Run text detection on an image"""
@@ -506,7 +663,7 @@ class TextDetectionTool(BaseTool):
         try:
             image = Image.open(image_path)
             img_array = np.array(image)
-            results = self.detector.readtext(img_array)
+            results = self.detector.readtext(img_array, width_ths=0.7, paragraph=False)
             texts = []
 
             for idx, detection in enumerate(results):
@@ -541,6 +698,11 @@ class TextDetectionTool(BaseTool):
             # Second pass: propagate label classifications to nearby unclassified values
             self._propagate_labels_to_values(texts)
 
+            # Third pass: find missing values near labels via targeted re-crop
+            new_values = self._find_missing_values(texts, image_path)
+            if new_values:
+                texts.extend(new_values)
+
             return json.dumps({
                 "texts": texts,
                 "count": len(texts),
@@ -571,8 +733,6 @@ class ObjectDetectionTool(BaseTool):
         "laptop", "tv", "cell phone", "remote", "keyboard", "mouse",
         # Vehicles (may have license plates)
         "car", "truck", "bus", "motorcycle", "bicycle",
-        # Documents/books
-        "book",
         # Personal items
         "backpack", "handbag", "suitcase"
     }
@@ -1010,6 +1170,8 @@ class TextRiskAssessmentTool(BaseTool):
         # CRITICAL: Double-check specific critical types as fallback
         elif text_type in self.RISK_TYPES['medium_risk_types']:
             return RiskLevel.MEDIUM if confidence > 0.5 else RiskLevel.LOW
+        elif text_type == "numeric_fragment":
+            return RiskLevel.MEDIUM
         else:
             return RiskLevel.LOW
         
@@ -1137,7 +1299,7 @@ class ObjectRiskAssessmentTool(BaseTool):
             return RiskLevel.MEDIUM
         
         # Personal items, input devices
-        if risk_category in ["personal_items", "input_devices"]:
+        if risk_category in ["personal_item", "input_device"]:
             return RiskLevel.LOW
 
         # Other privacy-relevant objects
@@ -1220,7 +1382,7 @@ class ObjectRiskAssessmentTool(BaseTool):
             else:
                 user_sensitivity = self.privacy_profile.context_sensitivity.get("background_items", "medium")
             
-            requires_protection = contains_screen or risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
+            requires_protection = risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
 
             return json.dumps({
                 "detection_id": obj_id,
@@ -1292,12 +1454,18 @@ class SpatialRelationshipTool(BaseTool):
             texts = data.get("texts", [])
             objects = data.get("objects", [])
 
+            # Adaptive threshold: 20% of image diagonal, clamped to [150, 400] px
+            image_width = data.get("image_width", 1024)
+            image_height = data.get("image_height", 768)
+            image_diag = (image_width**2 + image_height**2) ** 0.5
+            adaptive_threshold = max(150, min(400, image_diag * 0.20))
+
             escalations = []
 
             # Rule 1: Face near PII text (identity linkage)
             for face in faces:
                 for text in texts:
-                    if self._is_near(face["bbox"], text["bbox"], threshold = 200):
+                    if self._is_near(face["bbox"], text["bbox"], threshold=adaptive_threshold):
                         if text.get("attributes", {}).get("is_pii", False):
                             escalations.append({
                                 "elements": [face["id"], text["id"]],
@@ -1306,15 +1474,17 @@ class SpatialRelationshipTool(BaseTool):
                                 "relationship_type": "identity_linkage"
                             })
 
-            # Rule 2: Face near screen
+            # Rule 2: Face near screen — flag for VLM review but do NOT auto-escalate.
+            # Screen devices default to LOW in Phase 1. VLM decides severity based
+            # on whether the screen is actually on/showing content.
             for face in faces:
                 for obj in objects:
                     if obj.get("contains_screen", False):
-                        if self._is_near(face["bbox"], obj["bbox"], threshold = 300):
+                        if self._is_near(face["bbox"], obj["bbox"], threshold=adaptive_threshold):
                             escalations.append({
-                                "elements": [face["id"], obj["id"]],
-                                "escalation_amount": 1,
-                                "reason": "Face near screen with visible content",
+                                "elements": [obj["id"]],  # Only the screen device
+                                "escalation_amount": 0,   # Flag only, no auto-escalation
+                                "reason": "Face near screen device (VLM: verify screen state)",
                                 "relationship_type": "content_association"
                             })
             
@@ -1446,9 +1616,11 @@ class RiskEscalationTool(BaseTool):
         "Applies risk escalations based on spatial relationships. "
         "Use this tool after spatial analysis to escalate risk severity for elements with compounded privacy risks."
     )
+    config: Any = None
 
-    def __init__(self, **kwargs):
+    def __init__(self, config=None, **kwargs):
         super().__init__(**kwargs)
+        self.config = config
     
     def _escalate_severity(self, current_severity: str, escalation_amount: int) -> str:
         """Escalate risk severity."""
@@ -1471,13 +1643,20 @@ class RiskEscalationTool(BaseTool):
 
             assessment_map = {a["detection_id"]: a for a in assessments}
             escalations_applied = 0
+            applied_to = set()  # (element_id, relationship_type) dedup
 
             for escalation in escalations:
                 elements = escalation.get("elements", [])
                 escalation_amount = escalation.get("escalation_amount", 1)
                 reason = escalation.get("reason", "Contextual escalation")
+                rel_type = escalation.get("relationship_type", "unknown")
 
                 for element_id in elements:
+                    key = (element_id, rel_type)
+                    if key in applied_to:
+                        continue
+                    applied_to.add(key)
+
                     if element_id in assessment_map:
                         assessment = assessment_map[element_id]
                         old_severity = assessment.get("severity", "medium")
@@ -1485,6 +1664,8 @@ class RiskEscalationTool(BaseTool):
 
                         if new_severity != old_severity:
                             assessment["severity"] = new_severity
+                            if self.config is not None:
+                                assessment["color_code"] = get_risk_color(self.config, new_severity)
                             assessment["factors"]["final_risk"] = new_severity
                             assessment["factors"]["escalation_reason"] = reason
                             assessment["requires_protection"] = new_severity in ["high", "critical"]
@@ -1661,6 +1842,46 @@ class ReclassifyAssessmentTool(BaseTool):
         assessment = self.assessments[index]
         old_severity = assessment.get("severity", "low")
 
+        # Guard: screen devices are pre-verified by focused VLM crop — do not override
+        if assessment.get("element_type") == "object":
+            factors = assessment.get("factors", {})
+            if factors.get("contains_screen", False) or factors.get("risk_category") == "screen_device":
+                return json.dumps({
+                    "status": "blocked",
+                    "index": index,
+                    "element": assessment.get("element_description", "?"),
+                    "message": f"Screen device [{index}] was verified by focused VLM crop. Do not reclassify."
+                })
+
+        # Guard: never downgrade faces with consent=none (bystanders are always CRITICAL)
+        severity_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+        if assessment.get("element_type") == "face":
+            consent = assessment.get("consent_status", "none")
+            if hasattr(consent, 'value'):
+                consent = consent.value
+            if consent == "none":
+                new_rank = severity_rank.get(new_severity_lower, 0)
+                old_rank = severity_rank.get(old_severity, 0)
+                if new_rank < old_rank:
+                    return json.dumps({
+                        "status": "blocked",
+                        "index": index,
+                        "element": assessment.get("element_description", "?"),
+                        "message": f"Cannot downgrade face [{index}] with consent=none. Bystander faces are always CRITICAL."
+                    })
+
+        # Guard: never downgrade CRITICAL/HIGH text items
+        if assessment.get("element_type") == "text":
+            old_rank = severity_rank.get(old_severity, 0)
+            new_rank = severity_rank.get(new_severity_lower, 0)
+            if new_rank < old_rank and old_rank >= 2:
+                return json.dumps({
+                    "status": "blocked",
+                    "index": index,
+                    "element": assessment.get("element_description", "?"),
+                    "message": f"Cannot downgrade text [{index}] from {old_severity}. Phase 1 PII pattern match is authoritative."
+                })
+
         # No-op: already at target severity
         if old_severity == new_severity_lower:
             return json.dumps({
@@ -1750,6 +1971,43 @@ class BatchReclassifyTool(BaseTool):
             if old_severity == new_severity:
                 results.append(f"[{index}] SKIP: already {new_severity}")
                 continue
+
+            # Guard: screen devices are pre-verified by focused VLM crop
+            if assessment.get("element_type") == "object":
+                factors = assessment.get("factors", {})
+                if factors.get("contains_screen", False) or factors.get("risk_category") == "screen_device":
+                    results.append(
+                        f"[{index}] BLOCKED: screen device verified by focused VLM crop. Do not reclassify."
+                    )
+                    continue
+
+            # Guard: never downgrade faces with consent=none
+            severity_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+            if assessment.get("element_type") == "face":
+                consent = assessment.get("consent_status", "none")
+                if hasattr(consent, 'value'):
+                    consent = consent.value
+                if consent == "none":
+                    new_rank = severity_rank.get(new_severity, 0)
+                    old_rank = severity_rank.get(old_severity, 0)
+                    if new_rank < old_rank:
+                        results.append(
+                            f"[{index}] BLOCKED: cannot downgrade face with consent=none. "
+                            f"Bystander faces are always CRITICAL."
+                        )
+                        continue
+
+            # Guard: never downgrade CRITICAL/HIGH text items
+            severity_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+            if assessment.get("element_type") == "text":
+                old_rank = severity_rank.get(old_severity, 0)
+                new_rank = severity_rank.get(new_severity, 0)
+                if new_rank < old_rank and old_rank >= 2:
+                    results.append(
+                        f"[{index}] BLOCKED: cannot downgrade text from {old_severity}. "
+                        f"Phase 1 PII match is authoritative."
+                    )
+                    continue
 
             # Guard: protect split-created value items from accidental downgrade
             det_id = str(assessment.get("detection_id", ""))
@@ -1877,6 +2135,18 @@ class SplitAssessmentTool(BaseTool):
 
             for desc in part_descriptions:
                 desc_lower = desc.lower().strip()
+
+                # Multi-word descriptions: try merge match FIRST to avoid
+                # partial single-word matches (e.g., "bank" matching "bank account")
+                if ' ' in desc_lower:
+                    merged = self._try_merge_match(desc_lower, ocr_words, used_indices)
+                    if merged is not None:
+                        for idx in merged["used"]:
+                            used_indices.add(idx)
+                        result_bboxes.append(merged["bbox"])
+                        continue
+
+                # Single-word match (or multi-word fallback)
                 best_match_idx = None
                 best_score = 0
 
@@ -1897,7 +2167,7 @@ class SplitAssessmentTool(BaseTool):
                     used_indices.add(best_match_idx)
                     result_bboxes.append(ocr_words[best_match_idx]["bbox"])
                 else:
-                    # No match found — try merging multiple OCR words
+                    # No match found — try merging multiple OCR words (single-word fallback)
                     merged = self._try_merge_match(desc_lower, ocr_words, used_indices)
                     if merged:
                         for idx in merged["used"]:
@@ -1915,29 +2185,37 @@ class SplitAssessmentTool(BaseTool):
     def _try_merge_match(self, target: str, ocr_words: List[Dict], used: set) -> Optional[Dict]:
         """
         Try to match a description by merging consecutive OCR words.
-        E.g., target="PIN: 4821" might match OCR words ["PIN:", "4821"].
+        E.g., target="8765 4321 0987" might match OCR words ["8765", "4321", "0987"].
+
+        Finds the LONGEST matching merge (most OCR words covered) to avoid
+        partial matches that miss trailing words (e.g., missing "0987").
 
         Returns:
             Dict with "bbox" (merged) and "used" (set of indices), or None.
         """
-        # Try merging 2-4 consecutive available words
         available = [(i, w) for i, w in enumerate(ocr_words) if i not in used]
+        best_match = None
+        best_length = 0
+
         for start in range(len(available)):
-            for length in range(2, min(5, len(available) - start + 1)):
+            for length in range(2, min(6, len(available) - start + 1)):
                 group = available[start:start + length]
                 merged_text = " ".join(w["text"].lower().strip() for _, w in group)
                 # Check if merged text contains target or vice versa
                 if target in merged_text or merged_text in target:
-                    # Merge bboxes: union of all word bboxes
-                    all_x1 = min(w["bbox"][0] for _, w in group)
-                    all_y1 = min(w["bbox"][1] for _, w in group)
-                    all_x2 = max(w["bbox"][0] + w["bbox"][2] for _, w in group)
-                    all_y2 = max(w["bbox"][1] + w["bbox"][3] for _, w in group)
-                    return {
-                        "bbox": [all_x1, all_y1, all_x2 - all_x1, all_y2 - all_y1],
-                        "used": set(i for i, _ in group)
-                    }
-        return None
+                    # Prefer longest match (covers more OCR words)
+                    if length > best_length:
+                        all_x1 = min(w["bbox"][0] for _, w in group)
+                        all_y1 = min(w["bbox"][1] for _, w in group)
+                        all_x2 = max(w["bbox"][0] + w["bbox"][2] for _, w in group)
+                        all_y2 = max(w["bbox"][1] + w["bbox"][3] for _, w in group)
+                        best_match = {
+                            "bbox": [all_x1, all_y1, all_x2 - all_x1, all_y2 - all_y1],
+                            "used": set(i for i, _ in group)
+                        }
+                        best_length = length
+
+        return best_match
 
     def _spatial_split_bbox(self, original_bbox, num_parts, original_text=""):
         """
