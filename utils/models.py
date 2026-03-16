@@ -205,6 +205,12 @@ class RiskAssessment(BaseModel):
     requires_protection: bool = True
     legal_requirement: bool = False
 
+    # Screen-only bbox for screen devices (top portion of device bbox, excludes keyboard/trackpad)
+    screen_bbox: Optional[BoundingBox] = None
+
+    # Phase 1.5a screen state: "verified_on", "verified_off", or None (not a screen device)
+    screen_state: Optional[str] = None
+
     # Consent-related (for faces)
     person_id: Optional[str] = None
     person_label: Optional[str] = None
@@ -310,13 +316,15 @@ class ProtectionStrategy(BaseModel):
     recommended_action: str      # Protect, None, None with Confirmation
     recommended_method: Optional[ObfuscationMethod] = None
     parameters: Dict[str, Any] = Field(default_factory = dict)
-    reasoning: str 
+    reasoning: str
     alternative_options: List[AlternativeMethod] = Field(default_factory = list)
     ethical_compliance: str = "COMPLIANT"
     execution_priority: int = Field(ge = 1, le = 5)
     optional: bool = False
     requires_user_decision: bool = False
     user_can_override: bool = True
+    # SAM segmentation mask path (set by PrecisionSegmenter after Agent 3)
+    segmentation_mask_path: Optional[str] = None
 
 class StrategyRecommendations(BaseModel):
     """Complete strategy recommendations"""
@@ -438,3 +446,28 @@ class SplitAssessmentInput(BaseModel):
     """Input schema for split_assessment tool."""
     index: int = Field(description="Assessment index (0-based) to split")
     parts: List[SplitPart] = Field(description="List of parts to split into (minimum 2)")
+
+
+# Agent 3 (Strategy Agent) tool input schemas
+
+class ModifyStrategyInput(BaseModel):
+    """Input schema for modify_strategy tool."""
+    index: int = Field(description="Strategy index (0-based)")
+    method: str = Field(description="New method: blur, pixelate, solid_overlay, inpaint, avatar_replace, none")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Method parameters (e.g. kernel_size, block_size, color)")
+    reasoning: str = Field(default="VLM strategy review", description="Why this change improves the strategy")
+
+
+class ModifyStrategyItem(BaseModel):
+    """Single modification within a batch."""
+    index: int = Field(description="Strategy index (0-based)")
+    method: str = Field(description="New method: blur, pixelate, solid_overlay, inpaint, avatar_replace, none")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Method parameters")
+    reasoning: str = Field(default="VLM strategy review", description="Why this change improves the strategy")
+
+
+class BatchModifyStrategiesInput(BaseModel):
+    """Input schema for batch_modify_strategies tool."""
+    modifications: List[ModifyStrategyItem] = Field(
+        description="List of strategy modifications to apply"
+    )

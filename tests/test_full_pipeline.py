@@ -1,12 +1,13 @@
 """
 Full Pipeline Integration Test
-Detection → Risk Assessment → Consent Identity → JSON + Risk Map
+Detection → Risk Assessment → Consent Identity → Strategy → JSON + Risk Map
 
 Runs the complete privacy protection pipeline including:
 - Agent 1: Detection (faces, text, objects)
 - Agent 2: Risk Assessment (Phase 1 deterministic + optional Phase 2 VLM)
 - Agent 2.5: Consent Identity (face matching against MongoDB)
-- JSON export with all identity fields
+- Agent 3: Strategy (Phase 1 rule defaults + optional Phase 2 VLM review)
+- JSON export with all identity fields + strategy recommendations
 - Visual risk map with severity-colored bounding boxes
 
 Requires: MongoDB running locally (mongod)
@@ -28,11 +29,12 @@ sys.path.insert(0, str(project_root / "utils"))
 
 from utils.config import load_config
 from utils.models import RiskLevel, PrivacyProfile
-from utils.visualization import export_risk_results_json, generate_risk_map
+from utils.visualization import export_risk_results_json, generate_risk_map, export_strategy_results_json, generate_protection_preview
 from utils.storage import FaceDatabase
 from agents.detection_agent import DetectionAgent
 from agents.risk_assessment_agent import RiskAssessmentAgent
 from agents.consent_identity_agent import ConsentIdentityAgent
+from agents.strategy_agent import StrategyAgent
 
 # Test database (separate from production)
 TEST_DB_NAME = "privacy_guard_test_pipeline"
@@ -98,7 +100,7 @@ def test_full_pipeline(
     """
     print("=" * 80)
     print("Full Pipeline Integration Test")
-    print("Detection → Risk Assessment → Consent Identity → JSON + Risk Map")
+    print("Detection → Risk Assessment → Consent Identity → Strategy → JSON + Risk Map")
     print("=" * 80 + "\n")
 
     pipeline_start = time.time()
@@ -168,6 +170,19 @@ def test_full_pipeline(
     except Exception as e:
         print(f"  Failed to initialize Consent Identity Agent: {e}")
         print(f"  Make sure MongoDB is running: mongod")
+        traceback.print_exc()
+        return False
+
+    # 2d: Strategy Agent
+    try:
+        strategy_agent = StrategyAgent(
+            config=config,
+            privacy_profile=PrivacyProfile(),
+            vlm_backend="llama-cpp",
+        )
+        print(f"  Strategy Agent ready")
+    except Exception as e:
+        print(f"  Failed to initialize Strategy Agent: {e}")
         traceback.print_exc()
         return False
 
@@ -265,7 +280,54 @@ def test_full_pipeline(
             # Print full results
             print_risk_summary(risk_result)
 
-            # Phase D: Export JSON + Risk Map
+            # Phase D: Strategy Recommendations
+            print(f"\n  Phase D: Strategy Agent...")
+            if fallback_only:
+                strategy_result = strategy_agent.run(risk_result, str(image_path))
+            else:
+                strategy_result = strategy_agent.run(risk_result, str(image_path), annotated_image)
+
+            # Phase D.5: Precise Segmentation (SAM)
+            if not fallback_only:
+                print(f"\n  Phase D.5: SAM Segmentation...")
+                try:
+                    from utils.segmentation import PrecisionSegmenter
+                    if not hasattr(test_full_pipeline, '_segmenter'):
+                        test_full_pipeline._segmenter = PrecisionSegmenter(device="cpu")
+                    segmenter = test_full_pipeline._segmenter
+
+                    seg_results = segmenter.process_strategies(
+                        str(image_path),
+                        strategy_result.strategies,
+                        risk_result.risk_assessments,
+                        output_dir=str(output_dir),
+                    )
+                    # Store mask paths on strategies for Agent 4
+                    for strategy in strategy_result.strategies:
+                        if strategy.detection_id in seg_results:
+                            mask_data = seg_results[strategy.detection_id]
+                            strategy.segmentation_mask_path = mask_data.get("mask_path")
+                    print(f"  SAM: {len(seg_results)} masks generated")
+
+                    # Generate side-by-side protection preview (bbox vs SAM)
+                    if seg_results:
+                        preview_path = output_dir / f"{image_path.stem}_protection_preview.png"
+                        generate_protection_preview(
+                            str(image_path),
+                            strategy_result,
+                            risk_result,
+                            seg_results,
+                            output_path=str(preview_path),
+                        )
+                except ImportError:
+                    print(f"  SAM skipped (mobile-sam not installed)")
+                except FileNotFoundError as e:
+                    print(f"  SAM skipped ({e})")
+                except Exception as e:
+                    print(f"  SAM error (non-fatal): {e}")
+                    import traceback; traceback.print_exc()
+
+            # Phase E: Export JSON + Risk Map + Strategy JSON
             json_path = output_dir / f"{image_path.stem}_risk_results.json"
             export_risk_results_json(
                 risk_result, detections=detections, output_path=str(json_path)
@@ -274,6 +336,11 @@ def test_full_pipeline(
             risk_map_path = output_dir / f"{image_path.stem}_risk_map.png"
             generate_risk_map(
                 risk_result, str(image_path), output_path=str(risk_map_path)
+            )
+
+            strategy_json_path = output_dir / f"{image_path.stem}_strategies.json"
+            export_strategy_results_json(
+                strategy_result, output_path=str(strategy_json_path)
             )
 
             results_summary.append({
@@ -293,6 +360,9 @@ def test_full_pipeline(
                     1 for a in risk_result.risk_assessments
                     if a.element_type == "face"
                 ),
+                "strategies_total": len(strategy_result.strategies),
+                "protections_recommended": strategy_result.total_protections_recommended,
+                "user_confirmations": strategy_result.requires_user_confirmation,
             })
 
         except Exception as e:
@@ -324,7 +394,8 @@ def test_full_pipeline(
                     f"  {r['image']:20s} | Risk: {r['overall_risk']:>8s} | "
                     f"Assessments: {r['total_assessments']:>2d} | "
                     f"Critical: {r['critical']} | Low: {r['low']} | "
-                    f"Faces: {r['faces_identified']}/{r['faces_total']} identified"
+                    f"Faces: {r['faces_identified']}/{r['faces_total']} identified | "
+                    f"Protections: {r['protections_recommended']}"
                 )
             else:
                 print(f"  {r['image']:20s} | FAILED: {r['error'][:50]}")
@@ -356,7 +427,7 @@ def test_full_pipeline(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Full Pipeline Test: Detection → Risk Assessment → Consent Identity"
+        description="Full Pipeline Test: Detection → Risk Assessment → Consent Identity → Strategy"
     )
     parser.add_argument(
         "--dataset", type=str, default="data/test_images",

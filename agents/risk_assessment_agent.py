@@ -812,6 +812,16 @@ class RiskAssessmentAgent:
                 else:
                     bbox = BoundingBox(x=0, y=0, width=0, height=0)
 
+                # Handle screen_bbox if present (screen devices only)
+                screen_bbox_raw = d.get("screen_bbox")
+                screen_bbox = None
+                if screen_bbox_raw is not None:
+                    if isinstance(screen_bbox_raw, dict):
+                        screen_bbox = BoundingBox(**screen_bbox_raw)
+                    elif isinstance(screen_bbox_raw, list) and len(screen_bbox_raw) == 4:
+                        screen_bbox = BoundingBox(x=screen_bbox_raw[0], y=screen_bbox_raw[1],
+                                                  width=screen_bbox_raw[2], height=screen_bbox_raw[3])
+
                 risk_assessment = RiskAssessment(
                     detection_id=d.get("detection_id", "unknown"),
                     element_type=d.get("element_type", "unknown"),
@@ -822,6 +832,8 @@ class RiskAssessmentAgent:
                     reasoning=d.get("reasoning", d.get("factors", {}).get("escalation_reason", "Tool-based assessment")),
                     user_sensitivity_applied=d.get("user_sensitivity_applied", "medium"),
                     bbox=bbox,
+                    screen_bbox=screen_bbox,
+                    screen_state=d.get("factors", {}).get("screen_state"),
                     requires_protection=d.get("requires_protection", False),
                     legal_requirement=d.get("legal_requirement", False),
                     person_id=d.get("person_id"),

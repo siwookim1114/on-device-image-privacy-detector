@@ -7,13 +7,17 @@ visual risk maps with color-coded bounding boxes by severity level.
 
 import json
 from pathlib import Path
-from typing import Optional
-from PIL import Image, ImageDraw, ImageFont
+from typing import Dict, Optional
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+import numpy as np
 
 from utils.models import (
+    ObfuscationMethod,
     RiskAnalysisResult,
     RiskLevel,
     DetectionResults,
+    StrategyRecommendations,
 )
 
 
@@ -88,6 +92,10 @@ def _serialize_assessment(a) -> dict:
         "bbox": a.bbox.to_list(),
         "requires_protection": a.requires_protection,
         "legal_requirement": a.legal_requirement,
+        # Screen-only bbox for screen devices (Agent 4 uses this instead of full device bbox)
+        "screen_bbox": a.screen_bbox.to_list() if a.screen_bbox else None,
+        # Phase 1.5a screen state verification
+        "screen_state": a.screen_state,
         # Identity fields (from Agent 2.5)
         "person_id": a.person_id,
         "person_label": a.person_label,
@@ -191,7 +199,7 @@ def generate_risk_map(
             else 2
         )
 
-        # Draw bounding box
+        # Draw bounding box (always use full detection bbox for risk map)
         x1, y1, x2, y2 = assessment.bbox.to_xyxy()
         draw.rectangle([x1, y1, x2, y2], outline=color, width=line_width)
 
@@ -244,3 +252,212 @@ def generate_risk_map(
         print(f"  Risk map saved: {output_path}")
 
     return image
+
+
+def export_strategy_results_json(
+    result: StrategyRecommendations,
+    output_path: Optional[str] = None,
+) -> dict:
+    """
+    Export strategy recommendations as JSON.
+
+    Args:
+        result: StrategyRecommendations from the Strategy Agent
+        output_path: Optional file path to save JSON
+
+    Returns:
+        Serialized dict of all strategy data
+    """
+    results = {
+        "image_path": result.image_path,
+        "total_strategies": len(result.strategies),
+        "total_protections_recommended": result.total_protections_recommended,
+        "requires_user_confirmation": result.requires_user_confirmation,
+        "estimated_processing_time_ms": result.estimated_processing_time_ms,
+        "strategies": [
+            _serialize_strategy(s) for s in result.strategies
+        ],
+    }
+
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w") as f:
+            json.dump(results, f, indent=2, default=str)
+        print(f"  Strategy results saved: {output_path}")
+
+    return results
+
+
+def _serialize_strategy(s) -> dict:
+    """Serialize a single ProtectionStrategy to a JSON-safe dict."""
+    return {
+        "detection_id": s.detection_id,
+        "element": s.element,
+        "severity": s.severity.value if hasattr(s.severity, "value") else s.severity,
+        "recommended_action": s.recommended_action,
+        "recommended_method": s.recommended_method.value if s.recommended_method else None,
+        "parameters": s.parameters,
+        "reasoning": s.reasoning,
+        "alternative_options": [
+            {
+                "method": a.method.value if hasattr(a.method, "value") else a.method,
+                "parameters": a.parameters,
+                "reasoning": a.reasoning,
+                "score": a.score,
+            }
+            for a in s.alternative_options
+        ],
+        "ethical_compliance": s.ethical_compliance,
+        "execution_priority": s.execution_priority,
+        "optional": s.optional,
+        "requires_user_decision": s.requires_user_decision,
+        "user_can_override": s.user_can_override,
+        "segmentation_mask_path": s.segmentation_mask_path,
+    }
+
+
+def generate_protection_preview(
+    image_path: str,
+    strategies: StrategyRecommendations,
+    risk_result: RiskAnalysisResult,
+    seg_results: Dict[str, Dict],
+    output_path: Optional[str] = None,
+) -> Image.Image:
+    """
+    Generate a side-by-side comparison: bbox obfuscation vs SAM mask obfuscation.
+
+    Left half:  Rectangular bbox-based blur/pixelate/overlay (traditional approach)
+    Right half: SAM mask-based obfuscation (precise, natural-looking)
+
+    Only elements with method != none are shown. Text elements use bbox on both
+    sides (SAM is not applied to text).
+
+    Args:
+        image_path: Path to the original image
+        strategies: StrategyRecommendations from Agent 3
+        risk_result: RiskAnalysisResult from Agent 2
+        seg_results: SAM results dict from PrecisionSegmenter.process_strategies()
+        output_path: Optional file path to save the preview
+
+    Returns:
+        PIL Image with side-by-side comparison
+    """
+    original = Image.open(image_path).convert("RGB")
+    img_w, img_h = original.size
+
+    # Create two copies
+    bbox_img = original.copy()
+    sam_img = original.copy()
+
+    # Build assessment lookup
+    assessment_map = {a.detection_id: a for a in risk_result.risk_assessments}
+
+    for strategy in strategies.strategies:
+        method = strategy.recommended_method
+        if method is None or method == ObfuscationMethod.NONE:
+            continue
+
+        assessment = assessment_map.get(strategy.detection_id)
+        if assessment is None:
+            continue
+
+        bbox = assessment.bbox.to_list()  # [x, y, w, h]
+        x, y, w, h = bbox
+
+        # --- Apply bbox-based obfuscation (left side) ---
+        _apply_obfuscation_bbox(bbox_img, x, y, w, h, method, strategy.parameters)
+
+        # --- Apply SAM mask-based obfuscation (right side) ---
+        if strategy.detection_id in seg_results:
+            mask = seg_results[strategy.detection_id]["mask"]
+            _apply_obfuscation_mask(sam_img, mask, method, strategy.parameters)
+        else:
+            # No SAM mask (text elements) → use bbox on both sides
+            _apply_obfuscation_bbox(sam_img, x, y, w, h, method, strategy.parameters)
+
+    # Create side-by-side canvas
+    gap = 4
+    canvas_w = img_w * 2 + gap
+    canvas = Image.new("RGB", (canvas_w, img_h + 30), (30, 30, 30))
+
+    canvas.paste(bbox_img, (0, 30))
+    canvas.paste(sam_img, (img_w + gap, 30))
+
+    # Add labels
+    draw = ImageDraw.Draw(canvas)
+    font_size = max(12, min(18, img_h // 60))
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
+    except Exception:
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+
+    draw.text((img_w // 2 - 60, 6), "BBOX (traditional)", fill=(255, 100, 100), font=font)
+    draw.text((img_w + gap + img_w // 2 - 60, 6), "SAM (precise)", fill=(100, 255, 100), font=font)
+
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        canvas.save(output_path)
+        print(f"  Protection preview saved: {output_path}")
+
+    return canvas
+
+
+def _apply_obfuscation_bbox(
+    image: Image.Image, x: int, y: int, w: int, h: int,
+    method: ObfuscationMethod, params: dict,
+):
+    """Apply obfuscation to a rectangular bbox region."""
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(image.width, x + w), min(image.height, y + h)
+    if x2 <= x1 or y2 <= y1:
+        return
+
+    region = image.crop((x1, y1, x2, y2))
+
+    if method == ObfuscationMethod.BLUR:
+        kernel = params.get("kernel_size", 25)
+        region = region.filter(ImageFilter.GaussianBlur(radius=kernel // 2))
+    elif method == ObfuscationMethod.PIXELATE:
+        block = params.get("block_size", 16)
+        small_w = max(1, (x2 - x1) // block)
+        small_h = max(1, (y2 - y1) // block)
+        region = region.resize((small_w, small_h), Image.NEAREST)
+        region = region.resize((x2 - x1, y2 - y1), Image.NEAREST)
+    elif method == ObfuscationMethod.SOLID_OVERLAY:
+        color = params.get("color", "black")
+        if color == "black":
+            color = (0, 0, 0)
+        elif isinstance(color, str):
+            color = (0, 0, 0)
+        region = Image.new("RGB", (x2 - x1, y2 - y1), color)
+
+    image.paste(region, (x1, y1))
+
+
+def _apply_obfuscation_mask(
+    image: Image.Image, mask: np.ndarray,
+    method: ObfuscationMethod, params: dict,
+):
+    """Apply obfuscation only to pixels where mask > 0."""
+    img_np = np.array(image)
+
+    if method == ObfuscationMethod.BLUR:
+        kernel = params.get("kernel_size", 25)
+        blurred = np.array(image.filter(ImageFilter.GaussianBlur(radius=kernel // 2)))
+        img_np[mask > 0] = blurred[mask > 0]
+    elif method == ObfuscationMethod.PIXELATE:
+        block = params.get("block_size", 16)
+        h, w = img_np.shape[:2]
+        small = image.resize((max(1, w // block), max(1, h // block)), Image.NEAREST)
+        pixelated = np.array(small.resize((w, h), Image.NEAREST))
+        img_np[mask > 0] = pixelated[mask > 0]
+    elif method == ObfuscationMethod.SOLID_OVERLAY:
+        color = params.get("color", "black")
+        if color == "black" or isinstance(color, str):
+            color = [0, 0, 0]
+        img_np[mask > 0] = color
+
+    image.paste(Image.fromarray(img_np))
