@@ -35,6 +35,7 @@ from agents.detection_agent import DetectionAgent
 from agents.risk_assessment_agent import RiskAssessmentAgent
 from agents.consent_identity_agent import ConsentIdentityAgent
 from agents.strategy_agent import StrategyAgent
+from agents.execution_agent import ExecutionAgent
 
 # Test database (separate from production)
 TEST_DB_NAME = "privacy_guard_test_pipeline"
@@ -186,6 +187,11 @@ def test_full_pipeline(
         traceback.print_exc()
         return False
 
+    execution_agent = ExecutionAgent(
+        vlm_backend=None if fallback_only else "llama-cpp"
+    )
+    print(f"  Execution Agent ready")
+
     print()
 
     # ---- Step 3: Find test images ----
@@ -327,7 +333,18 @@ def test_full_pipeline(
                     print(f"  SAM error (non-fatal): {e}")
                     import traceback; traceback.print_exc()
 
-            # Phase E: Export JSON + Risk Map + Strategy JSON
+            # Phase E: Agent 4 — Execution (apply protections)
+            print(f"\n  Phase E: Execution Agent...")
+            protected_path = output_dir / f"{image_path.stem}_protected.png"
+            execution_report = execution_agent.run(
+                strategy_result=strategy_result,
+                risk_result=risk_result,
+                image_path=str(image_path),
+                output_path=str(protected_path),
+            )
+            print(f"  Protected image saved: {protected_path}")
+
+            # Phase F: Export JSON + Risk Map + Strategy JSON
             json_path = output_dir / f"{image_path.stem}_risk_results.json"
             export_risk_results_json(
                 risk_result, detections=detections, output_path=str(json_path)

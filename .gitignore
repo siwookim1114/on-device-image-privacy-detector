@@ -74,3 +74,6 @@ llama.cpp/
 # Environment
 .env
 .env.local
+
+# MD files
+CLAUDE.md

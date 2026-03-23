@@ -347,7 +347,7 @@ class TransformationResult(BaseModel):
     parameters: Dict[str, Any]
     status: str    # success, failed, skipped
     execution_time_ms: float
-    error_message: Optional[float] = None
+    error_message: Optional[str] = None
 
 class ExecutionReport(BaseModel):
     """Report of execution agent"""
@@ -471,3 +471,23 @@ class BatchModifyStrategiesInput(BaseModel):
     modifications: List[ModifyStrategyItem] = Field(
         description="List of strategy modifications to apply"
     )
+
+# Agent 4 Phase 2: Verification tool input schemas
+
+class PatchRegionInput(BaseModel):
+    """Input schema for patch_region tool."""
+    detection_id: str = Field(description="Detection ID of the element to re-protect")
+    method: str = Field(description="Strengthened method: blur, pixelate, or solid_overlay")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Method parameters (e.g. kernel_size, block_size)")
+    expand_px: int = Field(default=0, description="Pixels to expand bbox in all directions (0-30)")
+    reasoning: str = Field(default="VLM verification", description="What leaked content was found")
+
+class AddProtectionInput(BaseModel):
+    """Input schema for add_protection tool."""
+    x: int = Field(description="X coordinate of the region to protect")
+    y: int = Field(description="Y coordinate of the region to protect")
+    width: int = Field(description="Width of the region")
+    height: int = Field(description="Height of the region")
+    method: str = Field(description="Method: blur, pixelate, or solid_overlay")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Method parameters")
+    reasoning: str = Field(default="VLM verification", description="What leaked content was found")
