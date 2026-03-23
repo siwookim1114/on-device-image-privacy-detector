@@ -56,7 +56,8 @@ class RiskAssessmentAgent:
         config,
         privacy_profile: Optional[PrivacyProfile] = None,
         reasoning_mode: str = "balanced",
-        vlm_backend: str = "llama-cpp"
+        vlm_backend: str = "llama-cpp",
+        ocr_reader=None,
     ):
         """
         Initialize the Two-Phase Risk Assessment Agent.
@@ -72,7 +73,11 @@ class RiskAssessmentAgent:
                 - mlx: Use vllm-mlx server (default, fastest on Apple Silicon)
                 - llama-cpp: Use llama-server
                 - ollama: Use Ollama server
+            ocr_reader: Shared EasyOCR reader instance (avoids duplicate ~500MB init)
         """
+        # Reuse shared OCR reader if provided
+        if ocr_reader is not None:
+            self._ocr_reader = ocr_reader
         self.config = config
         self.privacy_profile = privacy_profile if privacy_profile else PrivacyProfile()
         self.reasoning_mode = reasoning_mode
@@ -216,7 +221,7 @@ class RiskAssessmentAgent:
                 overall_risk_level=RiskLevel.LOW,
                 faces_pending_identity=0,
                 confirmed_risks=0,
-                processimg_time_ms=processing_time
+                processing_time_ms=processing_time
             )
             self._print_summary(result, processing_time)
             return result
@@ -861,7 +866,7 @@ class RiskAssessmentAgent:
             overall_risk_level=overall_risk,
             faces_pending_identity=faces_pending_identity,
             confirmed_risks=confirmed_risks,
-            processimg_time_ms=processing_time
+            processing_time_ms=processing_time
         )
 
         self._print_summary(result, processing_time)
@@ -899,8 +904,8 @@ class RiskAssessmentAgent:
         print(f"  Total assessments: {len(result.risk_assessments)}")
         print(f"    - Critical: {len(result.get_critical_risks())}")
         print(f"    - High: {len(result.get_high_risks())}")
-        print(f"    - Medium: {len(result.get_by_serverity(RiskLevel.MEDIUM))}")
-        print(f"    - Low: {len(result.get_by_serverity(RiskLevel.LOW))}")
+        print(f"    - Medium: {len(result.get_by_severity(RiskLevel.MEDIUM))}")
+        print(f"    - Low: {len(result.get_by_severity(RiskLevel.LOW))}")
         print(f"  Requires protection: {result.confirmed_risks}")
         print(f"  Faces pending identity: {result.faces_pending_identity}")
         print(f"{'='*60}\n")

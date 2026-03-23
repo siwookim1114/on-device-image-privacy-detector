@@ -76,4 +76,4 @@ llama.cpp/
 .env.local
 
 # MD files
-CLAUDE.md
+*.md

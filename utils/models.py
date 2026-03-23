@@ -225,19 +225,19 @@ class RiskAnalysisResult(BaseModel):
     overall_risk_level: RiskLevel
     faces_pending_identity: int = 0
     confirmed_risks: int = 0
-    processimg_time_ms: float = 0.0
+    processing_time_ms: float = 0.0
 
-    def get_by_serverity(self, severity: RiskLevel) -> List[RiskAssessment]:
+    def get_by_severity(self, severity: RiskLevel) -> List[RiskAssessment]:
         """Get risks by severity level"""
         return [r for r in self.risk_assessments if r.severity == severity]
 
     def get_critical_risks(self) -> List[RiskAssessment]:
         """Get all critical risks""" 
-        return self.get_by_serverity(RiskLevel.CRITICAL)
+        return self.get_by_severity(RiskLevel.CRITICAL)
     
     def get_high_risks(self) -> List[RiskAssessment]:
         """Get all high risks"""
-        return self.get_by_serverity(RiskLevel.HIGH)
+        return self.get_by_severity(RiskLevel.HIGH)
 
 # Face Recognition & Consent Models
 class FaceEmbedding(BaseModel):
@@ -353,7 +353,7 @@ class ExecutionReport(BaseModel):
     """Report of execution agent"""
     image_path: str
     status: str      # completed, partial, failed
-    tranformations_applied: List[TransformationResult] = Field(default_factory = list)
+    transformations_applied: List[TransformationResult] = Field(default_factory = list)
     elements_unchanged: List[Dict[str, str]] = Field(default_factory = list)
     total_execution_time_ms: float = 0.0
     protected_image_path: Optional[str] = None

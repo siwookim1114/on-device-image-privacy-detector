@@ -173,7 +173,7 @@ class ExecutionAgent:
         report = ExecutionReport(
             image_path=image_path,
             status=status,
-            tranformations_applied=transformations,
+            transformations_applied=transformations,
             elements_unchanged=unchanged,
             total_execution_time_ms=total_ms,
             protected_image_path=output_path,
@@ -370,7 +370,7 @@ class ExecutionAgent:
 
         except GraphRecursionError:
             print(f"  VLM hit max iterations — returning with patches applied so far")
-            return len(patches_applied) if 'patches_applied' in dir() else 0
+            return len(patches_applied)
 
         except Exception as e:
             print(f"  VLM verification failed: {e}")
@@ -495,7 +495,7 @@ class ExecutionAgent:
             print(f"    - BBOX (rectangular): {bbox}")
         print(f"  Phase 2 — Verification patches: {verification_patches}")
         print(f"  Elements unchanged: {unchanged}")
-        failed = sum(1 for t in report.tranformations_applied if t.status == "failed")
+        failed = sum(1 for t in report.transformations_applied if t.status == "failed")
         if failed:
             print(f"  Failed: {failed}")
         print(f"  Processing time: {report.total_execution_time_ms:.1f}ms")

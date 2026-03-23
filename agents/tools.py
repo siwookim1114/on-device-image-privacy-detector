@@ -130,6 +130,8 @@ class FaceDetectionTool(BaseTool):
         # Calculate the face area as percentage of image area
         face_area  = width * height
         image_area = img_width * img_height
+        if image_area == 0:
+            return "medium"
         ratio = face_area / image_area
 
         # Classify based on area ratio
@@ -193,9 +195,9 @@ class FaceDetectionTool(BaseTool):
             img_width, img_height = image.size
 
             try:
-                # Run MTCNN Detection -> detect() returns: boxes, probabilities, landmarks
+                # Single MTCNN pass: detect() returns boxes, probs, landmarks
+                # without running the full pipeline twice (previously called detector(image) again for tensors)
                 boxes, probs, landmarks = self.detector.detect(image, landmarks=True)
-                face_tensors = self.detector(image)   # Get aligned face tensors for embedding extraction
 
             except RuntimeError as e:
                 # MPS fallback: if MPS fails, retry on CPU
@@ -212,7 +214,6 @@ class FaceDetectionTool(BaseTool):
                         post_process = True
                     )
                     boxes, probs, landmarks = cpu_detector.detect(image, landmarks=True)
-                    face_tensors = cpu_detector(image)
                 else:
                     raise e
             # Handling No Detections
@@ -222,8 +223,8 @@ class FaceDetectionTool(BaseTool):
             # Processing Each Individual Face
             faces = []
             for i, (box, prob, landmark) in enumerate(zip(boxes, probs, landmarks)):
-                # Skipping low confidence detections (higher threshold to reduce false positives)
-                if prob < 0.9:
+                # Skipping low confidence detections (0.8 threshold — for privacy, missed faces are costlier than false positives)
+                if prob < 0.8:
                     continue
 
                 # Extract Bounding Box
@@ -232,17 +233,21 @@ class FaceDetectionTool(BaseTool):
                 width = x2 - x1
                 height = y2 - y1
 
-                # Getting Face Embeddings
+                # Getting Face Embeddings (manual crop+align — avoids second MTCNN pass)
                 embedding = None
-                if face_tensors is not None:
-                    # Single tensor or batch tensor
-                    if isinstance(face_tensors, torch.Tensor):
-                        if face_tensors.dim() == 4 and i < face_tensors.shape[0]:
-                            # Batch tensor: [N, 3, 160, 160]
-                            embedding = self._get_embedding(face_tensors[i])
-                        elif face_tensors.dim() == 3 and i == 0:
-                            # Single tensor: [3, 160, 160]
-                            embedding = self._get_embedding(face_tensors)
+                try:
+                    margin = 20
+                    cx1 = max(0, x1 - margin)
+                    cy1 = max(0, y1 - margin)
+                    cx2 = min(img_width, x2 + margin)
+                    cy2 = min(img_height, y2 + margin)
+                    face_crop = image.crop((cx1, cy1, cx2, cy2)).resize((160, 160), Image.BILINEAR)
+                    face_tensor = torch.from_numpy(np.array(face_crop)).permute(2, 0, 1).float()
+                    # Normalize to [-1, 1] (same as MTCNN post_process=True)
+                    face_tensor = (face_tensor - 127.5) / 128.0
+                    embedding = self._get_embedding(face_tensor)
+                except Exception:
+                    pass
 
                 # Building Face Result
                 faces.append({
@@ -1637,7 +1642,7 @@ class RiskEscalationTool(BaseTool):
         except ValueError:
             current_idx = 1
         
-        new_idx = min(current_idx + escalation_amount, len(risk_order) - 1)
+        new_idx = max(0, min(current_idx + escalation_amount, len(risk_order) - 1))
         return risk_order[new_idx]
 
     def _run(self, escalation_data_json: str) -> str:
@@ -1758,11 +1763,12 @@ class FalsePositiveFilterTool(BaseTool):
             })
         
         except Exception as e:
+            fallback = data.get("assessments", []) if 'data' in locals() else []
             return json.dumps({
                 "error": str(e),
-                "assessments": data.get("assessments", []),
-                "original_count": len(data.get("assessments", [])),
-                "filtered_count": len(data.get("assessments", []))
+                "assessments": fallback,
+                "original_count": len(fallback),
+                "filtered_count": len(fallback)
             })
 
 class ConsistencyValidationTool(BaseTool):
@@ -1804,9 +1810,10 @@ class ConsistencyValidationTool(BaseTool):
             })
         
         except Exception as e:
+            fallback = data.get("assessments", []) if 'data' in locals() else []
             return json.dumps({
                 "error": str(e),
-                "assessments": data.get("assessments", []),
+                "assessments": fallback,
                 "validated_count": 0,
                 "corrections_made": 0
             })

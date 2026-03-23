@@ -123,6 +123,13 @@ class PrecisionSegmenter:
         if best_idx < 0:
             best_idx = np.argmax(scores)
 
+        # Minimum area constraint: mask must be >= 30% of input bbox area.
+        # MobileSAM can produce tiny artifact masks (eyebrow-sized); fall back
+        # to the highest-scoring mask if the smallest one is too small.
+        bbox_area = w * h
+        if bbox_area > 0 and masks[best_idx].sum() < 0.3 * bbox_area:
+            best_idx = int(np.argmax(scores))
+
         mask = masks[best_idx].astype(np.uint8)
 
         refined_bbox = self._mask_to_bbox(mask)

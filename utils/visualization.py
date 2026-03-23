@@ -44,7 +44,7 @@ def export_risk_results_json(
     results = {
         "image_path": result.image_path,
         "overall_risk_level": result.overall_risk_level.value,
-        "processing_time_ms": result.processimg_time_ms,
+        "processing_time_ms": result.processing_time_ms,
         "total_assessments": len(result.risk_assessments),
         "confirmed_risks": result.confirmed_risks,
         "faces_pending_identity": result.faces_pending_identity,

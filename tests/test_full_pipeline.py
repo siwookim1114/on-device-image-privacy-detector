@@ -51,12 +51,12 @@ def print_risk_summary(result):
     print(f"  ├─ Total assessments: {len(result.risk_assessments)}")
     print(f"  ├─ Requires protection: {result.confirmed_risks}")
     print(f"  ├─ Faces pending identity: {result.faces_pending_identity}")
-    print(f"  └─ Processing time: {result.processimg_time_ms:.2f}ms")
+    print(f"  └─ Processing time: {result.processing_time_ms:.2f}ms")
 
     critical = result.get_critical_risks()
     high = result.get_high_risks()
-    medium = result.get_by_serverity(RiskLevel.MEDIUM)
-    low = result.get_by_serverity(RiskLevel.LOW)
+    medium = result.get_by_severity(RiskLevel.MEDIUM)
+    low = result.get_by_severity(RiskLevel.LOW)
 
     print(f"\n  Severity Breakdown:")
     print(f"  ├─ Critical: {len(critical)}")
@@ -133,6 +133,7 @@ def test_full_pipeline(
             config=config,
             privacy_profile=PrivacyProfile(),
             reasoning_mode=reasoning_mode,
+            ocr_reader=detection_agent.text_tool.detector,  # Share EasyOCR reader (~500MB savings)
         )
         print(f"  Risk Assessment Agent ready")
     except Exception as e:
@@ -367,7 +368,7 @@ def test_full_pipeline(
                 "total_assessments": len(risk_result.risk_assessments),
                 "critical": len(risk_result.get_critical_risks()),
                 "high": len(risk_result.get_high_risks()),
-                "low": len(risk_result.get_by_serverity(RiskLevel.LOW)),
+                "low": len(risk_result.get_by_severity(RiskLevel.LOW)),
                 "requires_protection": risk_result.confirmed_risks,
                 "faces_identified": sum(
                     1 for a in risk_result.risk_assessments
