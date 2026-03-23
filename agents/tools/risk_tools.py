@@ -1,849 +1,3 @@
-# Import required utils
-import torch
-from PIL import Image
-from typing import Any, List, Dict, Optional, ClassVar, Set, Tuple, Type, Union
-import json
-import numpy as np
-import re
-# Detector Libraries
-
-from facenet_pytorch import MTCNN     # Face Detection
-from facenet_pytorch import InceptionResnetV1  # Face Embeddings (for Future Consent Agent)
-import easyocr
-from ultralytics import YOLO         # Object Detection (YOLO)
-from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
-from utils.models import (
-    RiskLevel,
-    RiskType,
-    PrivacyProfile,
-    BoundingBox,
-    RiskAssessment,
-    FaceDetection,
-    TextDetection,
-    ObjectDetection,
-    DetectionResults,
-    ConsentStatus,
-    PersonClassification,
-    ReclassifyAssessmentInput,
-    ReclassifyItem,
-    BatchReclassifyInput,
-    SplitPart,
-    SplitAssessmentInput,
-    ModifyStrategyInput,
-    ModifyStrategyItem,
-    BatchModifyStrategiesInput,
-    ObfuscationMethod,
-    PatchRegionInput,
-    AddProtectionInput,
-)
-from utils.config import get_risk_color
-from utils.visualization import _apply_obfuscation_bbox
-
-
-def _parse_tool_input(raw_input) -> dict:
-    """
-    Parse tool input that may be a JSON string (fallback/ReAct) or a dict (tool calling API).
-    Tool calling agents pass args as dicts; direct _run() calls pass JSON strings.
-    """
-    if isinstance(raw_input, dict):
-        return raw_input
-    if isinstance(raw_input, str):
-        return json.loads(raw_input)
-    return json.loads(str(raw_input))
-
-
-## Detection Tools for Detection Agent
-
-class FaceDetectionTool(BaseTool):
-    """
-    Tool for detecting faces in images using MTCNN + Getting embeddings using FaceNet for identity matching
-
-    Tool is called by the Detection Agent to find all faces in an image.
-    Embeddings will be used by Consent Agent for face recognition.
-    """
-    name: str = "detect_faces"
-    description: str = (
-        "Detects human faces in the image. "
-        "Returns list of face locations with confidence scores, and embeddings for identity matching. "
-        "Use this tool when you need to detect and locate all faces in an image during the detection phase."
-    )
-    detector: Any = None
-    embedding_model: Any = None
-    device: torch.device = None
-    config: Any = None
-
-    def __init__(self, config, **kwargs):
-        super().__init__(**kwargs)
-        self.config = config
-        self.device = torch.device(config.system.device)
-        self._init_detector()
-
-    def _init_detector(self):
-        """
-        Initialize MTCNN face detector and FaceNet embedding model.
-
-        MTCNN detects faces, FaceNet generates 512-dimensional embeddings for face recognition.
-        """
-        try:
-            # Use CPU for MTCNN - MPS has compatibility issues with adaptive pooling
-            detector_device = torch.device("cpu") if self.device.type == "mps" else self.device
-            self.detector = MTCNN(
-                image_size = 160,    # Output face size
-                margin = 20,          # Extra pixels around face
-                min_face_size = 40,  # Ignore tiny faces (increased from 20 to reduce false positives)
-                thresholds = [0.7, 0.8, 0.8], # Higher thresholds to reduce false positives
-                factor = 0.709,               # Image pyramid scale factor
-                device = detector_device,     # CPU for MPS, otherwise use config device
-                keep_all = True,             # Return ALL faces, not just the best one,
-                post_process = True           # Normalize output for FaceNet
-            )
-
-            self.embedding_model = InceptionResnetV1(
-                pretrained = "vggface2",
-                device = detector_device
-            ).eval()    # Set to evaluation mode (no training)
-            print(f"Face detection tool ready (device: {detector_device})")
-
-        except Exception as e:
-            print(f"Face detector failed: {e}")
-            self.detector = None
-            self.embedding_model = None
-
-    def _classify_face_size(self, width: int, height: int, img_width: int, img_height: int) -> str:
-        """
-        Classify face size relative to the image.
-
-        Helps streamline Risk Assessment Agent determine importance:
-        - Large faces are likely main subjects
-        - Small faces are likely bystanders
-
-        Args:
-            width: Face bounding box width
-            height: Face bounding box height
-            img_width: Full image width
-            img_height: Full image height
-
-        Returns:
-            "large", "medium", or "small"
-        """
-        # Calculate the face area as percentage of image area
-        face_area  = width * height
-        image_area = img_width * img_height
-        if image_area == 0:
-            return "medium"
-        ratio = face_area / image_area
-
-        # Classify based on area ratio
-        if ratio > 0.1:     # Face is >10% of image
-            return "large"
-        elif ratio > 0.02:  # Face is 2-10% of image
-            return "medium"
-        else:                # Face is <2% of image
-            return "small"
-
-    def _get_embedding(self, face_tensor: torch.Tensor) -> Optional[List[float]]:
-        """
-        Generate 512-dimensional face embedding for identity matching
-
-        Used by the Consent Agent to:
-        1. Compare detected faces against known people in FaceDatabase
-        2. Store new face embeddings when user identifies someone
-
-        Args:
-            face_tensor: Preprocessed face tensor from MTCNN
-        Returns:
-            List of 512 floats (embedding vector) or None if failed
-        """
-        # Check if embedding model is available
-        if self.embedding_model is None or face_tensor is None:
-            return None
-
-        try:
-            # Disable gradient computation
-            with torch.no_grad():
-                if face_tensor.dim() == 3:
-                    face_tensor = face_tensor.unsqueeze(0)   # Ensure tensor has batch dimension
-
-                # Generate embedding
-                embedding = self.embedding_model(face_tensor)
-
-                # Convert to Python list of native floats for JSON serialization
-                return [float(x) for x in embedding.squeeze().cpu().numpy()]
-
-        except Exception as e:
-            # Return None if embedding fails (face might be too blurry, etc)
-            return None
-
-    def _run(self, image_path: str) -> str:
-        """
-        Run face detection on an image.
-
-        Main method that is to be run.
-
-        Args:
-            image_path: Path to the image file
-
-        Returns:
-            JSON string with detection results.
-        """
-        if self.detector is None:
-            return json.dumps({"error": "Face detector not available", "faces": [], "count": 0})
-
-        try:
-            image = Image.open(image_path).convert("RGB")
-            img_width, img_height = image.size
-
-            try:
-                # Single MTCNN pass: detect() returns boxes, probs, landmarks
-                # without running the full pipeline twice (previously called detector(image) again for tensors)
-                boxes, probs, landmarks = self.detector.detect(image, landmarks=True)
-
-            except RuntimeError as e:
-                # MPS fallback: if MPS fails, retry on CPU
-                if "MPS" in str(e) or "divisible" in str(e):
-                    print("MPS error detected, falling back to CPU for face detection...")
-                    cpu_detector = MTCNN(
-                        image_size=160,
-                        margin=20,
-                        min_face_size=40,
-                        thresholds=[0.7, 0.8, 0.8],
-                        factor=0.709,
-                        device=torch.device("cpu"),
-                        keep_all=True,
-                        post_process = True
-                    )
-                    boxes, probs, landmarks = cpu_detector.detect(image, landmarks=True)
-                else:
-                    raise e
-            # Handling No Detections
-            if boxes is None:
-                return json.dumps({"faces": [], "count": 0})
-
-            # Processing Each Individual Face
-            faces = []
-            for i, (box, prob, landmark) in enumerate(zip(boxes, probs, landmarks)):
-                # Skipping low confidence detections (0.8 threshold — for privacy, missed faces are costlier than false positives)
-                if prob < 0.8:
-                    continue
-
-                # Extract Bounding Box
-                # MTCNN returns [x1, y1, x2, y2] -> Convert to [x, y, width, height]
-                x1, y1, x2, y2 = map(int, box)
-                width = x2 - x1
-                height = y2 - y1
-
-                # Getting Face Embeddings (manual crop+align — avoids second MTCNN pass)
-                embedding = None
-                try:
-                    margin = 20
-                    cx1 = max(0, x1 - margin)
-                    cy1 = max(0, y1 - margin)
-                    cx2 = min(img_width, x2 + margin)
-                    cy2 = min(img_height, y2 + margin)
-                    face_crop = image.crop((cx1, cy1, cx2, cy2)).resize((160, 160), Image.BILINEAR)
-                    face_tensor = torch.from_numpy(np.array(face_crop)).permute(2, 0, 1).float()
-                    # Normalize to [-1, 1] (same as MTCNN post_process=True)
-                    face_tensor = (face_tensor - 127.5) / 128.0
-                    embedding = self._get_embedding(face_tensor)
-                except Exception:
-                    pass
-
-                # Building Face Result
-                faces.append({
-                    "id": f"face_{i}",
-                    "bbox": [x1, y1, width, height],
-                    "confidence": float(prob),
-                    "size": self._classify_face_size(width, height, img_width, img_height),
-                    "has_landmarks": landmark is not None,
-                    "has_embedding": embedding is not None,
-                    "embedding": embedding
-                })
-            return json.dumps({"faces": faces, "count": len(faces)})
-
-        except Exception as e:
-            return json.dumps({"error": str(e), "faces": [], "count": 0})
-
-
-class TextDetectionTool(BaseTool):
-    """Tool for detecting and recognizing text in images using EasyOCR"""
-    name: str = "detect_text"
-    description: str = (
-        "Detects and recognizes text in the image using OCR. "
-        "Returns detected text content and locations. "
-        "Use this tool when you need to detect and extract all text regions in an image during the detection phase."
-    )
-    detector: Any = None
-    config: Any = None
-
-    def __init__(self, config, **kwargs):
-        super().__init__(**kwargs)
-        self.config = config
-        self._init_detector()
-
-    def _init_detector(self):
-        """Initialize EasyOCR text detector"""
-        try:
-            self.detector = easyocr.Reader(
-                ["en"],
-                gpu = self.config.system.device == "cuda",
-                verbose = False
-            )
-            print("Text detection tool ready")
-
-        except Exception as e:
-            print(f"Text detector failed: {e}")
-            self.detector = None
-
-    def _classify_text_type(self, text: str) -> Dict[str, Any]:
-        """
-        Classify text for privacy risk assessment.
-
-        Distinguishes between:
-        - Actual sensitive values (SSN numbers, passwords, etc.) → CRITICAL/HIGH
-        - Labels only ("Password:", "Bank Account:") → LOW (context indicator, not actual data)
-
-        Returns:
-            Dict with type, is_sensitive, is_pii, is_critical, is_label_only flags
-        """
-        text_clean = text.strip()
-
-        # Normalize common OCR misreads: _ often misread from ":"
-        # Trailing: "PIN_" → "PIN:"
-        # Mid-text: "PIN_ 3902" → "PIN: 3902" (underscore followed by space+data)
-        text_clean = re.sub(r'[_]+\s*$', ':', text_clean)
-        text_clean = re.sub(r'[_]+\s+', ': ', text_clean)
-
-        # ----- CRITICAL: Social Security Number (actual digits) -----
-        if re.search(r'\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b', text_clean):
-            return {
-                "type": "ssn",
-                "is_sensitive": True,
-                "is_pii": True,
-                "is_critical": True,
-                "is_label_only": False
-            }
-
-        # ----- CRITICAL: Credit Card Number (actual digits) -----
-        if re.search(r'\b(?:\d{4}[-.\s]?){3}\d{4}\b', text_clean):
-            return {
-                "type": "credit_card",
-                "is_sensitive": True,
-                "is_pii": True,
-                "is_critical": True,
-                "is_label_only": False
-            }
-
-        # ----- Password/PIN: Separate label vs value -----
-        pw_match = re.search(r'\b(password|pwd|pin|passcode)\b', text_clean, re.IGNORECASE)
-        if pw_match:
-            # Extract everything after the keyword
-            after_keyword = text_clean[pw_match.end():].strip()
-            # Remove separator (colon, equals)
-            after_keyword = re.sub(r'^[:=]\s*', '', after_keyword).strip()
-
-            if after_keyword:
-                # Has actual value content (e.g., "PIN: 4821", "password=Secret123")
-                return {
-                    "type": "password",
-                    "is_sensitive": True,
-                    "is_pii": True,
-                    "is_critical": True,
-                    "is_label_only": False
-                }
-            else:
-                # Label only (e.g., "Password:", "PIN:")
-                return {
-                    "type": "password_label",
-                    "is_sensitive": True,
-                    "is_pii": False,
-                    "is_critical": False,
-                    "is_label_only": True
-                }
-
-        # ----- Bank/Financial: Composite (keyword + actual numbers) -----
-        # Broad keywords OK here because digits are required
-        if re.search(r'\b(bank|account|routing|iban)\s*[:=]?\s*\d{4,}', text_clean, re.IGNORECASE):
-            return {
-                "type": "bank_account",
-                "is_sensitive": True,
-                "is_pii": True,
-                "is_critical": True,
-                "is_label_only": False
-            }
-
-        # ----- Bank/Financial: Label only (stricter multi-word keywords to avoid false positives) -----
-        bank_label_match = re.search(r'\b(bank\s*account|account\s*number|routing\s*number|iban)\b', text_clean, re.IGNORECASE)
-        if bank_label_match:
-            return {
-                "type": "bank_label",
-                "is_sensitive": True,
-                "is_pii": False,
-                "is_critical": False,
-                "is_label_only": True
-            }
-
-        # ----- SSN/Credit Card Label (keyword without actual numbers) -----
-        ssn_label_match = re.search(r'\b(social\s*security|ssn)\b', text_clean, re.IGNORECASE)
-        if ssn_label_match:
-            return {
-                "type": "ssn_label",
-                "is_sensitive": True,
-                "is_pii": False,
-                "is_critical": False,
-                "is_label_only": True
-            }
-
-        credit_label_match = re.search(r'\b(credit\s*card)\b', text_clean, re.IGNORECASE)
-        if credit_label_match:
-            return {
-                "type": "credit_card_label",
-                "is_sensitive": True,
-                "is_pii": False,
-                "is_critical": False,
-                "is_label_only": True
-            }
-
-        # ----- PII: Phone Number -----
-        phone_patterns = [
-            r'\+?1?[-.\s]?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}',
-            r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b'
-        ]
-        for pattern in phone_patterns:
-            if re.search(pattern, text_clean):
-                return {
-                    "type": "phone_number",
-                    "is_sensitive": True,
-                    "is_pii": True,
-                    "is_critical": False,
-                    "is_label_only": False
-                }
-
-        # ----- PII: Email Address -----
-        if re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text_clean):
-            return {
-                "type": "email",
-                "is_sensitive": True,
-                "is_pii": True,
-                "is_critical": False,
-                "is_label_only": False
-            }
-
-        # ----- PII: Physical Address -----
-        address_keywords = [
-            'street', 'st.', 'st ', 'avenue', 'ave.', 'ave ',
-            'road', 'rd.', 'rd ', 'drive', 'dr.', 'dr ',
-            'lane', 'ln.', 'ln ', 'boulevard', 'blvd',
-            'apt', 'apartment', 'suite', 'unit', 'floor'
-        ]
-        if any(kw in text_clean.lower() for kw in address_keywords):
-            return {
-                "type": "address",
-                "is_sensitive": True,
-                "is_pii": True,
-                "is_critical": False,
-                "is_label_only": False
-            }
-
-        # ----- Numeric fragments: isolated 3-8 digit numbers or partial numeric PII patterns -----
-        # These could be fragments of SSN, PIN, account numbers split by OCR
-        if re.match(r'^\d{3,8}$', text_clean) or re.match(r'^\d{2,3}-\d{2,4}$', text_clean):
-            return {
-                "type": "numeric_fragment",
-                "is_sensitive": True,
-                "is_pii": False,
-                "is_critical": False,
-                "is_label_only": False
-            }
-
-        # ----- Default: General Text -----
-        return {
-            "type": "general_text",
-            "is_sensitive": False,
-            "is_pii": False,
-            "is_critical": False,
-            "is_label_only": False
-        }
-
-    def _bbox_distance(self, bbox1: List, bbox2: List) -> float:
-        """Calculate Euclidean distance between two bbox centers. Bboxes are [x, y, w, h]."""
-        c1x = bbox1[0] + bbox1[2] / 2
-        c1y = bbox1[1] + bbox1[3] / 2
-        c2x = bbox2[0] + bbox2[2] / 2
-        c2y = bbox2[1] + bbox2[3] / 2
-        return ((c1x - c2x) ** 2 + (c1y - c2y) ** 2) ** 0.5
-
-    def _propagate_labels_to_values(self, texts: List[Dict]) -> None:
-        """
-        Second pass: Propagate label classifications to nearby unclassified values.
-
-        When OCR splits "Password:" and "Magic123!" into separate blocks,
-        the label gets classified but the value doesn't. This pass links them
-        by spatial proximity so the value inherits the label's risk type.
-        """
-        # Map label types to the value classification they propagate
-        LABEL_TO_VALUE = {
-            "password_label": ("password", True),       # (value_type, is_critical)
-            "bank_label": ("bank_account", True),
-            "ssn_label": ("ssn", True),
-            "credit_card_label": ("credit_card", True),
-        }
-
-        labels = [t for t in texts if t.get("is_label_only", False)]
-        if not labels:
-            return
-
-        for label in labels:
-            propagation = LABEL_TO_VALUE.get(label["text_type"])
-            if not propagation:
-                continue
-
-            value_type, is_critical = propagation
-
-            for text in texts:
-                # Propagate to unclassified general text or numeric fragments (likely PII values)
-                if text["text_type"] not in ("general_text", "numeric_fragment") or text.get("is_label_only", False):
-                    continue
-
-                # Skip known label words that OCR split from their parent label
-                # e.g., "Bank Account:" split into "Bank" + "Account:" by OCR
-                # But do NOT skip unknown alphabetic strings — those may be passwords
-                # e.g., "HaurerWvifi" near "Password:" IS a password value
-                LABEL_WORDS = {
-                    "bank", "account", "social", "security", "credit", "card",
-                    "password", "pin", "routing", "number", "ssn", "iban",
-                    "name", "address", "email", "phone", "date", "birth",
-                    "expiry", "cvv", "code", "type", "id", "no",
-                }
-                text_content = text.get("text_content", "").strip()
-                text_clean = re.sub(r'[:\s\-_.,;]', '', text_content).lower()
-                if text_clean in LABEL_WORDS:
-                    continue
-
-                # Check spatial proximity
-                # Use tighter vertical threshold (same row) with wider horizontal reach
-                # to handle text spread across the same line in grid images
-                dist = self._bbox_distance(label["bbox"], text["bbox"])
-                label_cy = label["bbox"][1] + label["bbox"][3] / 2
-                text_cy = text["bbox"][1] + text["bbox"][3] / 2
-                vertical_dist = abs(label_cy - text_cy)
-
-                # Same row (within 50px vertically): allow 400px horizontal distance
-                # Different row: use standard 200px threshold
-                threshold = 400 if vertical_dist < 50 else 200
-
-                if dist < threshold:
-                    text["text_type"] = value_type
-                    text["is_pii"] = True
-                    text["is_critical"] = is_critical
-                    text["is_sensitive"] = True
-
-    def _find_missing_values(self, texts: List[Dict], image_path: str) -> List[Dict]:
-        """
-        Third pass: find values near labels that have no nearby classified value.
-
-        When OCR detects a label like "PIN:" but misses the value next to it,
-        re-crop the region to the right of the label and run OCR to recover
-        the missing value.
-
-        Returns:
-            List of new text dicts to append to the texts list.
-        """
-        LABEL_TO_VALUE = {
-            "password_label": ("password", True),
-            "bank_label": ("bank_account", True),
-            "ssn_label": ("ssn", True),
-            "credit_card_label": ("credit_card", True),
-        }
-
-        labels = [t for t in texts
-                  if t.get("is_label_only", False) and t["text_type"] in LABEL_TO_VALUE]
-        if not labels:
-            return []
-
-        # Find labels that have no nearby classified value
-        labels_without_values = []
-        for label in labels:
-            has_value = False
-            for t in texts:
-                if t is label or t.get("is_label_only", False):
-                    continue
-                if not (t.get("is_pii", False) or t.get("is_critical", False)):
-                    continue
-                label_cy = label["bbox"][1] + label["bbox"][3] / 2
-                text_cy = t["bbox"][1] + t["bbox"][3] / 2
-                dist = self._bbox_distance(label["bbox"], t["bbox"])
-                threshold = 400 if abs(label_cy - text_cy) < 50 else 200
-                if dist < threshold:
-                    has_value = True
-                    break
-            if not has_value:
-                labels_without_values.append(label)
-
-        if not labels_without_values:
-            return []
-
-        try:
-            image = Image.open(image_path)
-            img_w, img_h = image.size
-        except Exception:
-            return []
-
-        LABEL_WORDS = {
-            "bank", "account", "social", "security", "credit", "card",
-            "password", "pin", "routing", "number", "ssn", "iban",
-        }
-
-        new_texts = []
-        next_id = len(texts)
-
-        for label in labels_without_values:
-            lx, ly, lw, lh = label["bbox"]
-
-            # Search region: to the right of the label, padded vertically
-            search_x = lx + lw
-            search_y = max(0, ly - int(lh * 0.5))
-            search_x2 = min(search_x + lw * 4, img_w)
-            search_y2 = min(search_y + lh * 2, img_h)
-
-            if search_x2 - search_x < 15 or search_y2 - search_y < 10:
-                continue
-
-            try:
-                crop = image.crop((search_x, search_y, search_x2, search_y2))
-                crop_array = np.array(crop)
-
-                ocr_results = self.detector.readtext(
-                    crop_array, width_ths=0.1, paragraph=False
-                )
-
-                for (box_pts, text_content, conf) in ocr_results:
-                    if conf < 0.25 or len(text_content.strip()) < 2:
-                        continue
-
-                    # Skip label words
-                    clean = re.sub(r'[:\s\-_.,;]', '', text_content).lower()
-                    if clean in LABEL_WORDS:
-                        continue
-
-                    # Convert local coords back to image coords
-                    pts = np.array(box_pts)
-                    min_x = int(pts[:, 0].min()) + search_x
-                    min_y = int(pts[:, 1].min()) + search_y
-                    max_x = int(pts[:, 0].max()) + search_x
-                    max_y = int(pts[:, 1].max()) + search_y
-                    new_bbox = [min_x, min_y, max_x - min_x, max_y - min_y]
-
-                    # Check for overlap with existing detections
-                    overlaps = False
-                    for existing in texts + new_texts:
-                        ex, ey, ew, eh = existing["bbox"]
-                        if (min_x < ex + ew and max_x > ex and
-                                min_y < ey + eh and max_y > ey):
-                            overlaps = True
-                            break
-                    if overlaps:
-                        continue
-
-                    value_type, is_critical = LABEL_TO_VALUE[label["text_type"]]
-
-                    new_texts.append({
-                        "id": f"text_recrop_{next_id}",
-                        "text_content": text_content,
-                        "bbox": new_bbox,
-                        "confidence": float(conf),
-                        "text_type": value_type,
-                        "is_sensitive": True,
-                        "is_pii": True,
-                        "is_critical": is_critical,
-                        "is_label_only": False,
-                    })
-                    next_id += 1
-                    print(f"    RECROP: Found '{text_content}' near "
-                          f"'{label.get('text_content', '')}' → {value_type}")
-
-            except Exception as e:
-                print(f"    RECROP ERROR near '{label.get('text_content', '')}': {e}")
-
-        return new_texts
-
-    def _run(self, image_path: str) -> str:
-        """Run text detection on an image"""
-        if self.detector is None:
-            return json.dumps({"error": "Text detector not available", "texts": [], "count": 0})
-
-        try:
-            image = Image.open(image_path)
-            img_array = np.array(image)
-            results = self.detector.readtext(img_array, width_ths=0.7, low_text=0.3, paragraph=False)
-            texts = []
-
-            for idx, detection in enumerate(results):
-                bbox_points, text, confidence = detection
-
-                if confidence < 0.3:  # Lower threshold to catch more text
-                    continue
-
-                x_coords = [p[0] for p in bbox_points]
-                y_coords = [p[1] for p in bbox_points]
-
-                # Classify text type for privacy assessment
-                classification = self._classify_text_type(text)
-
-                texts.append({
-                    "id": f"text_{idx}",
-                    "text_content": text,
-                    "bbox": [
-                        int(min(x_coords)),
-                        int(min(y_coords)),
-                        int(max(x_coords) - min(x_coords)),
-                        int(max(y_coords) - min(y_coords))
-                    ],
-                    "confidence": float(confidence),
-                    "text_type": classification["type"],
-                    "is_sensitive": classification["is_sensitive"],
-                    "is_pii": classification["is_pii"],
-                    "is_critical": classification["is_critical"],
-                    "is_label_only": classification["is_label_only"]
-                })
-
-            # Second pass: propagate label classifications to nearby unclassified values
-            self._propagate_labels_to_values(texts)
-
-            # Third pass: find missing values near labels via targeted re-crop
-            new_values = self._find_missing_values(texts, image_path)
-            if new_values:
-                texts.extend(new_values)
-
-            return json.dumps({
-                "texts": texts,
-                "count": len(texts),
-                "pii_count": sum(1 for t in texts if t["is_pii"]),
-                "critical_count": sum(1 for t in texts if t["is_critical"])
-            })
-
-        except Exception as e:
-            return json.dumps({"error": str(e), "texts": [], "count": 0})
-
-
-class ObjectDetectionTool(BaseTool):
-    """Tool for detecting objects in images using YOLO"""
-    name: str = "detect_objects"
-    description: str = (
-        "Detects objects in the image like cars, laptops, phones, screens, etc. "
-        "Returns list of detected objects with locations. "
-        "Use this tool when you need to detect privacy-relevant objects in an image during the detection phase."
-    )
-
-    detector: Any = None
-    device: Any = None
-    config: Any = None
-
-    # Privacy-relevant object classes from COCO dataset
-    PRIVACY_OBJECTS: ClassVar[Set[str]] = {
-        # Electronics with screens
-        "laptop", "tv", "cell phone", "remote", "keyboard", "mouse",
-        # Vehicles (may have license plates)
-        "car", "truck", "bus", "motorcycle", "bicycle",
-        # Personal items
-        "backpack", "handbag", "suitcase"
-    }
-
-    def __init__(self, config, **kwargs):
-        super().__init__(**kwargs)
-        self.config = config
-        self.device = config.system.device
-        self._init_detector()
-
-    def _init_detector(self):
-        """Initialize YOLO object detector"""
-        try:
-            self.detector = YOLO("yolov8n.pt")
-            print(f"Object detection tool ready (YOLO on {self.device})")
-        except Exception as e:
-            print(f"Object detector failed: {e}")
-            self.detector = None
-
-    def _is_privacy_relevant(self, class_name: str) -> bool:
-        """Check if object class is privacy-relevant"""
-        return class_name.lower() in self.PRIVACY_OBJECTS
-
-    def _get_risk_category(self, class_name: str) -> str:
-        """Categorize object by privacy risk type"""
-        class_lower = class_name.lower()
-
-        # Screen devices
-        if class_lower in {"laptop", "tv", "cell phone", "remote"}:
-            return "screen_device"
-
-        # Vehicles
-        if class_lower in {"car", "truck", "bus", "motorcycle", "bicycle"}:
-            return "vehicle"
-
-        # Personal items
-        if class_lower in {"backpack", "handbag", "suitcase"}:
-            return "personal_item"
-
-        # Input devices
-        if class_lower in {"keyboard", "mouse"}:
-            return "input_device"
-
-        return "other"
-
-    def _run(self, image_path: str) -> str:
-        """Run object detection on an image"""
-        if self.detector is None:
-            return json.dumps({"error": "Object detector not available", "objects": [], "count": 0})
-
-        try:
-            # Run YOLO detection with lower confidence threshold to catch more objects
-            results = self.detector.predict(
-                image_path,
-                conf = 0.25,  # Lower threshold to detect more objects (was 0.5)
-                verbose = False,
-                save = False,
-                device = self.device
-            )
-
-            objects = []
-            for result in results:
-                boxes = result.boxes
-                if boxes is None:
-                    continue
-
-                for box in boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                    class_id = int(box.cls[0])
-                    class_name = result.names[class_id]
-                    confidence = float(box.conf[0])
-
-                    # Check privacy relevance
-                    is_relevant = self._is_privacy_relevant(class_name)
-                    risk_category = self._get_risk_category(class_name)
-
-                    # Only include privacy-relevant objects
-                    if is_relevant:
-                        objects.append({
-                            "id": f"obj_{len(objects)}",
-                            "label": class_name,  # Changed from "class" to "label"
-                            "bbox": [x1, y1, x2 - x1, y2 - y1],
-                            "confidence": confidence,
-                            "is_privacy_relevant": is_relevant,
-                            "risk_category": risk_category,
-                            "contains_screen": risk_category == "screen_device"
-                        })
-
-            return json.dumps({
-                "objects": objects,
-                "count": len(objects),
-                "privacy_relevant_count": sum(1 for o in objects if o["is_privacy_relevant"]),
-                "screen_count": sum(1 for o in objects if o.get("contains_screen", False))
-            })
-
-        except Exception as e:
-            return json.dumps({"error": str(e), "objects": [], "count": 0})
-
-
 ## Risk Assessment Tools
 """
 Risk Assessment Tools - Specialized tools for comprehensive privacy risk analysis
@@ -868,10 +22,33 @@ The agent uses these factors to generate VLM-based reasoning.
       - ConsistencyValidationTool
 """
 
+import json
+import re
+import numpy as np
+from typing import Any, List, Dict, Optional, ClassVar, Set, Tuple, Type, Union
+
+from PIL import Image
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+from utils.models import (
+    RiskLevel,
+    RiskType,
+    PrivacyProfile,
+    BoundingBox,
+    ConsentStatus,
+    ReclassifyAssessmentInput,
+    ReclassifyItem,
+    BatchReclassifyInput,
+    SplitPart,
+    SplitAssessmentInput,
+)
+from agents.tools.common import _parse_tool_input, get_risk_color
+
+
 class FaceRiskAssessmentTool(BaseTool):
     """
     Advance face privacy risk assessment with multi-factor scoring
-    Returns structured data for agent to use in VLM reasoning. 
+    Returns structured data for agent to use in VLM reasoning.
 
     Factors considered:
     1. Base risk: User sensitivity + consent status settings
@@ -896,10 +73,10 @@ class FaceRiskAssessmentTool(BaseTool):
 
     # Risk escalation mappings
     SENSITIVITY_TO_RISK: ClassVar[Dict] = {
-        "critical": RiskLevel.CRITICAL,     
-        "high": RiskLevel.HIGH,             
-        "medium": RiskLevel.MEDIUM,         
-        "low": RiskLevel.LOW        
+        "critical": RiskLevel.CRITICAL,
+        "high": RiskLevel.HIGH,
+        "medium": RiskLevel.MEDIUM,
+        "low": RiskLevel.LOW
     }
 
     SIZE_ESCALATION: ClassVar[Dict] = {
@@ -929,14 +106,14 @@ class FaceRiskAssessmentTool(BaseTool):
         key = key_map.get(consent_status, "bystander_faces")
         sensitivity = self.privacy_profile.identity_sensitivity.get(key, "critical")
         return self.SENSITIVITY_TO_RISK.get(sensitivity, RiskLevel.HIGH)
-    
+
     def _escalate_risk(self, base_risk: RiskLevel, escalation: int) -> RiskLevel:
         """Escalate or de-escalate risk level by specified amount."""
         risk_order = [RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH, RiskLevel.CRITICAL]
         current_idx = risk_order.index(base_risk)
         new_idx = max(0, min(current_idx + escalation, len(risk_order) - 1))
         return risk_order[new_idx]
-    
+
     def _calculate_position_factor(self, bbox: BoundingBox, image_width: int, image_height: int) -> Tuple[int, str]:
         """
         Calculate position-based risk factor.
@@ -955,7 +132,7 @@ class FaceRiskAssessmentTool(BaseTool):
             return (1, "edge position (likely bystander)")
         else:
             return (0, "intermediate position")
-    
+
     def _explain_consent_status(self, consent_status: str) -> str:
         """Get human-readable consent explanation."""
         if consent_status == "none":
@@ -966,7 +143,7 @@ class FaceRiskAssessmentTool(BaseTool):
             return "known person with assumed consent"
         else:
             return f"person with {consent_status} consent status"
-    
+
     def _explain_size(self, size: str) -> str:
         "Get human-readable size explanation."
         return {
@@ -982,7 +159,7 @@ class FaceRiskAssessmentTool(BaseTool):
             "medium": "normal clarity",
             "low": "blurry or obscured, harder to identify"
         }.get(clarity, "normal clarity")
-    
+
     def _run(self, face_json: str) -> str:
         """
         Calculate all risk factors for a detected face.
@@ -991,7 +168,7 @@ class FaceRiskAssessmentTool(BaseTool):
             face_json: JSON with face data including id, bbox, size, clarity, confidence, attributes
 
         Returns:
-            JSON with calculated factors 
+            JSON with calculated factors
         """
         try:
             data = _parse_tool_input(face_json)
@@ -1008,13 +185,7 @@ class FaceRiskAssessmentTool(BaseTool):
 
             # Extract face properties
             face_id = data.get("id", "unknown")
-            bbox_raw = data.get("bbox", [0, 0, 0, 0])
-            if isinstance(bbox_raw, dict):
-                bbox = BoundingBox(**bbox_raw)
-            elif isinstance(bbox_raw, list):
-                bbox = BoundingBox(x=bbox_raw[0], y=bbox_raw[1], width=bbox_raw[2], height=bbox_raw[3])
-            else:
-                bbox = BoundingBox(x=0, y=0, width=0, height=0)
+            bbox = BoundingBox.from_raw(data.get("bbox", [0, 0, 0, 0]))
 
             size = data.get("size", "medium")
             confidence = data.get("confidence", 0.0)
@@ -1153,7 +324,7 @@ class TextRiskAssessmentTool(BaseTool):
         super().__init__(**kwargs)
         self.config = config
         self.privacy_profile = privacy_profile if privacy_profile else PrivacyProfile()
-    
+
     def _get_risk_level(
         self,
         text_type: str,
@@ -1167,7 +338,7 @@ class TextRiskAssessmentTool(BaseTool):
         Args:
             text_classification: (text_type, is_pii, is_critical) from _classify_text
             confidence: OCR confidence score
-        
+
         Returns:
             RiskLevel enum
         """
@@ -1186,7 +357,7 @@ class TextRiskAssessmentTool(BaseTool):
             return RiskLevel.MEDIUM
         else:
             return RiskLevel.LOW
-        
+
     def _explain_text_type(self, text_type: str, is_pii: bool, is_critical: bool) -> str:
         """Get human-readable text type explanation."""
         if is_critical:
@@ -1195,7 +366,7 @@ class TextRiskAssessmentTool(BaseTool):
             return f"personally identifiable information: {text_type}"
         else:
             return f"general text: {text_type}"
-    
+
     def _run(self, text_json: str) -> str:
         """
         Calculate risk factors using text data.
@@ -1218,13 +389,7 @@ class TextRiskAssessmentTool(BaseTool):
             # Extract data
             text_id = data.get("id", "unknown")
             text_content = data.get("text_content", "")
-            bbox_raw = data.get("bbox", [0, 0, 0, 0])
-            if isinstance(bbox_raw, dict):
-                bbox = BoundingBox(**bbox_raw)
-            elif isinstance(bbox_raw, list):
-                bbox = BoundingBox(x=bbox_raw[0], y=bbox_raw[1], width=bbox_raw[2], height=bbox_raw[3])
-            else:
-                bbox = BoundingBox(x=0, y=0, width=0, height=0)
+            bbox = BoundingBox.from_raw(data.get("bbox", [0, 0, 0, 0]))
             confidence = data.get("confidence", 0)
             text_type = data.get("text_type", "general_text")
             is_pii = data.get("attributes", {}).get("is_pii", False)
@@ -1236,13 +401,13 @@ class TextRiskAssessmentTool(BaseTool):
             # Get user sensitivity
             sensitivity_category = self.TYPE_TO_SENSITIVITY.get(text_type, "documents")
             user_sensitivity = self.privacy_profile.information_sensitivity.get(sensitivity_category, "high")
-            
+
             # Content preview (masked if sensitive)
             if is_critical or is_pii:
                 content_preview = f"[{text_type.upper()}_REDACTED]"
             else:
                 content_preview = text_content[:30] + "..." if len(text_content) > 30 else text_content
-            
+
             requires_protection = risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
 
             return json.dumps({
@@ -1256,9 +421,9 @@ class TextRiskAssessmentTool(BaseTool):
                 "bbox": bbox.to_list(),
                 "requires_protection": requires_protection,
                 "factors": {
-                    "text_type": text_type, 
+                    "text_type": text_type,
                     "text_type_explanation": self._explain_text_type(text_type, is_pii, is_critical),
-                    "is_pii": is_pii,     
+                    "is_pii": is_pii,
                     "is_critical": is_critical,
                     "content_preview": content_preview,
                     "ocr_confidence": confidence,
@@ -1266,7 +431,7 @@ class TextRiskAssessmentTool(BaseTool):
                     "user_sensitivity": user_sensitivity
                 }
             })
-        
+
         except Exception as e:
             return json.dumps({
                 "error": str(e),
@@ -1298,18 +463,18 @@ class ObjectRiskAssessmentTool(BaseTool):
     def _get_risk_level(self, risk_category: str, contains_screen: bool) -> RiskLevel:
         """
         Calculate risk level from pre-classified risk category.
-        
+
         ObjectDetectionTool already classified objects into risk categories.
         """
 
         # Screen devices: default LOW, VLM Phase 2 can escalate if sensitive content visible
         if contains_screen or risk_category == "screen_device":
             return RiskLevel.LOW
-        
+
         # Vehicles (licsense plate risk)
         if risk_category == "vehicle":
             return RiskLevel.MEDIUM
-        
+
         # Personal items, input devices
         if risk_category in ["personal_item", "input_device"]:
             return RiskLevel.LOW
@@ -1318,15 +483,15 @@ class ObjectRiskAssessmentTool(BaseTool):
         return RiskLevel.LOW
 
     def _get_risk_type(self, risk_category: str, contains_screen: bool) -> RiskType:
-        """Determine risk type from risk_category"""        
+        """Determine risk type from risk_category"""
         if contains_screen or risk_category == "screen_device":
             return RiskType.INFORMATION_DISCLOSURE
-        
+
         if risk_category == "vehicle":
             return RiskType.LOCATION_EXPOSURE
-        
+
         return RiskType.CONTEXT_EXPOSURE
-    
+
     def _explain_object_category(self, risk_category: str, label: str) -> str:
         """Human-readable object category explanation"""
         explanations = {
@@ -1337,14 +502,14 @@ class ObjectRiskAssessmentTool(BaseTool):
             "other": f"{label} (privacy-relevant object)"
         }
         return explanations.get(risk_category, f"{label}")
-    
+
     def _run(self, object_json: str) -> str:
         """
         Calculate risk factors using pre-classified object data.
 
         Args:
             object_json: JSON with object data from ObjectDetectionTool
-        
+
         Returns:
             JSON with calculated factors or filtered status
         """
@@ -1360,19 +525,13 @@ class ObjectRiskAssessmentTool(BaseTool):
             # Extract pre-classified data from ObjectDetectionTool
             obj_id = data.get("id", "unknown")
             obj_label = data.get("object_class", "unknown")
-            bbox_raw = data.get("bbox", [0, 0, 0, 0])
-            if isinstance(bbox_raw, dict):
-                bbox = BoundingBox(**bbox_raw)
-            elif isinstance(bbox_raw, list):
-                bbox = BoundingBox(x=bbox_raw[0], y=bbox_raw[1], width=bbox_raw[2], height=bbox_raw[3])
-            else:
-                bbox = BoundingBox(x=0, y=0, width=0, height=0)
+            bbox = BoundingBox.from_raw(data.get("bbox", [0, 0, 0, 0]))
             confidence = data.get("confidence", 0.0)
 
             # Use existing classification
             is_privacy_relevant = data.get("attributes", {}).get("is_privacy_relevant", True)
             risk_category = data.get("attributes", {}).get("risk_category", "other")
-            contains_screen = data.get("contains_screen", False) 
+            contains_screen = data.get("contains_screen", False)
 
             # Objects already filtered by ObjectDetectionTool
             if not is_privacy_relevant:
@@ -1381,7 +540,7 @@ class ObjectRiskAssessmentTool(BaseTool):
                     "filtered": True,
                     "reason": f"Object '{obj_label}' marked as not privacy-relevant"
                 })
-            
+
             # Calculate risk from existing classification
             risk_level = self._get_risk_level(risk_category, contains_screen)
             risk_type = self._get_risk_type(risk_category, contains_screen)
@@ -1393,7 +552,7 @@ class ObjectRiskAssessmentTool(BaseTool):
                 user_sensitivity = self.privacy_profile.location_sensitivity.get("license_plates", "high")
             else:
                 user_sensitivity = self.privacy_profile.context_sensitivity.get("background_items", "medium")
-            
+
             requires_protection = risk_level in [RiskLevel.CRITICAL, RiskLevel.HIGH]
 
             return json.dumps({
@@ -1414,7 +573,7 @@ class ObjectRiskAssessmentTool(BaseTool):
                     "detection_confidence": confidence,
                 }
             })
-        
+
         except Exception as e:
             return json.dumps({
                 "error": str(e),
@@ -1422,7 +581,7 @@ class ObjectRiskAssessmentTool(BaseTool):
                 "filtered": True,
                 "reason": f"Assessment error: {str(e)}"
             })
-        
+
 # Contextual Enhancement Tools
 class SpatialRelationshipTool(BaseTool):
     """Analyze spatial relationships between detected elements."""
@@ -1432,32 +591,25 @@ class SpatialRelationshipTool(BaseTool):
         "to identify compounded privacy risks. "
         "Use this tool when you need to find spatial relationships between detected elements (e.g., face near PII text, face near screen)."
     )
-    
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
     def _calculate_distance(self, bbox1: Dict, bbox2: Dict) -> float:
         """Calculate Euclidean distance between bbox centers."""
-        if isinstance(bbox1, list):
-            center1_x = bbox1[0] + bbox1[2] / 2
-            center1_y = bbox1[1] + bbox1[3] / 2
-        else:
-            center1_x = bbox1["x"] + bbox1["width"] / 2
-            center1_y = bbox1["y"] + bbox1["height"] / 2
-
-        if isinstance(bbox2, list):
-            center2_x = bbox2[0] + bbox2[2] / 2
-            center2_y = bbox2[1] + bbox2[3] / 2
-        else:
-            center2_x = bbox2["x"] + bbox2["width"] / 2
-            center2_y = bbox2["y"] + bbox2["height"] / 2
+        b1 = BoundingBox.from_raw(bbox1)
+        b2 = BoundingBox.from_raw(bbox2)
+        center1_x = b1.x + b1.width / 2
+        center1_y = b1.y + b1.height / 2
+        center2_x = b2.x + b2.width / 2
+        center2_y = b2.y + b2.height / 2
 
         return ((center1_x - center2_x) ** 2 + (center1_y - center2_y) ** 2) ** 0.5
-    
+
     def _is_near(self, bbox1: Dict, bbox2: Dict, threshold: float = 150) -> bool:
         """Check if bboxes are within threshold pixels."""
         return self._calculate_distance(bbox1, bbox2) < threshold
-    
+
     def _run(self, detections_json: str) -> str:
         """Analyze spatial relationships."""
         try:
@@ -1499,7 +651,7 @@ class SpatialRelationshipTool(BaseTool):
                                 "reason": "Face near screen device (VLM: verify screen state)",
                                 "relationship_type": "content_association"
                             })
-            
+
             # Rule 3: Multiple small faces (group bystanders)
             small_faces = [f for f in faces if f.get("size") == "small"]
             if len(faces) >= 3 and len(small_faces) >= 2:
@@ -1510,19 +662,19 @@ class SpatialRelationshipTool(BaseTool):
                         "reason": "Background face in group photo",
                         "relationship_type": "group_bystander"
                     })
-            
+
             return json.dumps({
                 "escalations": escalations,
                 "total_escalations": len(escalations)
             })
-        
+
         except Exception as e:
             return json.dumps({
                 "error": str(e),
                 "escalations": [],
                 "total_escalations": 0
             })
-        
+
 class ConsentInferenceTool(BaseTool):
     """Infers consent likelihood from visual cues."""
     name: str = "infer_consent_likelihood"
@@ -1536,13 +688,9 @@ class ConsentInferenceTool(BaseTool):
 
     def _get_relative_position(self, bbox: Dict, image_width: int, image_height: int) -> str:
         """Classify face position."""
-        if isinstance(bbox, list):
-            center_x = (bbox[0] + bbox[2] / 2) / image_width
-            center_y = (bbox[1] + bbox[3] / 2) / image_height
-
-        else:
-            center_x = (bbox["x"] + bbox["width"] / 2) / image_width
-            center_y = (bbox["y"] + bbox["height"] / 2) / image_height
+        b = BoundingBox.from_raw(bbox)
+        center_x = (b.x + b.width / 2) / image_width
+        center_y = (b.y + b.height / 2) / image_height
 
         if 0.3 <= center_x <= 0.7 and 0.3 <= center_y <= 0.7:
             return "center"
@@ -1550,7 +698,7 @@ class ConsentInferenceTool(BaseTool):
             return "edge"
         else:
             return "intermediate"
-    
+
     def _run(self, face_context_json: str) -> str:
         """Infer consent likelihood"""
         try:
@@ -1576,7 +724,7 @@ class ConsentInferenceTool(BaseTool):
             elif size == "small":
                 consent_score -= 0.2
                 reasoning_parts.append("small face (likely background)")
-            
+
             # Position
             position = self._get_relative_position(bbox, image_width, image_height)
             if position == "center":
@@ -1585,7 +733,7 @@ class ConsentInferenceTool(BaseTool):
             elif position == "edge":
                 consent_score -= 0.2
                 reasoning_parts.append("edge position")
-            
+
             # Count
             if total_faces == 1:
                 consent_score += 0.2
@@ -1593,7 +741,7 @@ class ConsentInferenceTool(BaseTool):
             elif total_faces > 3:
                 consent_score -= 0.1
                 reasoning_parts.append("group photo")
-            
+
             # Map to consent status
             if consent_score > 0.5:
                 status = ConsentStatus.ASSUMED.value
@@ -1604,7 +752,7 @@ class ConsentInferenceTool(BaseTool):
             else:
                 status = ConsentStatus.NONE.value
                 confidence = min(abs(consent_score) + 0.3, 0.8)
-            
+
             return json.dumps({
                 "face_id": face.get("id", "unknown"),
                 "inferred_consent_status": status,
@@ -1612,7 +760,7 @@ class ConsentInferenceTool(BaseTool):
                 "consent_score": consent_score,
                 "reasoning": " | ".join(reasoning_parts)
             })
-        
+
         except Exception as e:
             return json.dumps({
                 "error": str(e),
@@ -1633,7 +781,7 @@ class RiskEscalationTool(BaseTool):
     def __init__(self, config=None, **kwargs):
         super().__init__(**kwargs)
         self.config = config
-    
+
     def _escalate_severity(self, current_severity: str, escalation_amount: int) -> str:
         """Escalate risk severity."""
         risk_order = ["low", "medium", "high", "critical"]
@@ -1641,7 +789,7 @@ class RiskEscalationTool(BaseTool):
             current_idx = risk_order.index(current_severity)
         except ValueError:
             current_idx = 1
-        
+
         new_idx = max(0, min(current_idx + escalation_amount, len(risk_order) - 1))
         return risk_order[new_idx]
 
@@ -1649,7 +797,7 @@ class RiskEscalationTool(BaseTool):
         """Apply escalations."""
         try:
             data = _parse_tool_input(escalation_data_json)
-            
+
             assessments = data.get("assessments", [])
             escalations = data.get("escalations", [])
 
@@ -1682,12 +830,12 @@ class RiskEscalationTool(BaseTool):
                             assessment["factors"]["escalation_reason"] = reason
                             assessment["requires_protection"] = new_severity in ["high", "critical"]
                             escalations_applied += 1
-            
+
             return json.dumps({
                 "assessments": list(assessment_map.values()),
                 "escalations_applied": escalations_applied
             })
-        
+
         except Exception as e:
             return json.dumps({
                 "error": str(e),
@@ -1705,7 +853,7 @@ class FalsePositiveFilterTool(BaseTool):
     )
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-    
+
     def _run(self, assessments_json: str) -> str:
         """Filter false positives"""
         try:
@@ -1742,11 +890,11 @@ class FalsePositiveFilterTool(BaseTool):
                 elif element_type == "face" and confidence < 0.90:
                     filter_stats["low_confidence"] += 1
                     continue
-            
+
                 # Filter tiny elements
-                bbox = assessment.get("bbox", [0, 0, 0, 0])
-                width = bbox[2] if isinstance(bbox, list) else bbox.get("width", 0)
-                height = bbox[3] if isinstance(bbox, list) else bbox.get("height", 0)
+                bbox = BoundingBox.from_raw(assessment.get("bbox", [0, 0, 0, 0]))
+                width = bbox.width
+                height = bbox.height
 
                 if width < 20 or height < 20:
                     filter_stats["too_small"] += 1
@@ -1761,7 +909,7 @@ class FalsePositiveFilterTool(BaseTool):
                 "removed_count": len(assessments) - len(filtered),
                 "filter_stats": filter_stats
             })
-        
+
         except Exception as e:
             fallback = data.get("assessments", []) if 'data' in locals() else []
             return json.dumps({
@@ -1802,13 +950,13 @@ class ConsistencyValidationTool(BaseTool):
                 if severity == "low" and requires_protection:
                     assessment["requires_protection"] = False
                     corrections += 1
-                
+
             return json.dumps({
                 "assessments": assessments,
                 "validated_count": len(assessments),
                 "corrections_made": corrections
             })
-        
+
         except Exception as e:
             fallback = data.get("assessments", []) if 'data' in locals() else []
             return json.dumps({
@@ -2466,477 +1614,4 @@ class ValidateAssessmentsTool(BaseTool):
             "total_assessments": len(self.assessments),
             "summary": summary,
             "message": "Review complete. Do NOT call any more tools."
-        })
-
-
-## Strategy Agent Tools (Phase 2)
-
-# Valid obfuscation methods for validation
-VALID_METHODS = {"blur", "pixelate", "solid_overlay", "inpaint", "avatar_replace", "generative_replace", "none"}
-
-# Method strength ranking for safety guards
-METHOD_STRENGTH = {
-    "none": 0, "blur": 1, "pixelate": 2,
-    "avatar_replace": 3, "inpaint": 3, "generative_replace": 3,
-    "solid_overlay": 4,
-}
-
-# Screen device keywords for challenge detection
-SCREEN_KEYWORDS = {"laptop", "tv", "cell phone", "monitor", "phone", "screen"}
-
-
-class ModifyStrategyTool(BaseTool):
-    """Modify the obfuscation method/params for a single strategy."""
-    name: str = "modify_strategy"
-    description: str = (
-        "Modify the obfuscation method for a specific element. "
-        "Provide index, new method (blur/pixelate/solid_overlay/inpaint/avatar_replace/none), "
-        "optional parameters dict, and reasoning."
-    )
-    args_schema: Type = ModifyStrategyInput
-    handle_tool_error: bool = True
-    strategies: Any = None
-    allowed_methods: Any = None
-    challenges_issued: Any = None  # shared set() for challenge-confirm pattern
-
-    def _check_challenge(self, index: int, s: dict, method_lower: str) -> Optional[str]:
-        """
-        Challenge-confirm pattern: return a warning on first attempt to add
-        protection to items that likely don't need it. If the VLM calls again
-        for the same item, allow through (VLM confirmed its decision).
-        """
-        if self.challenges_issued is None:
-            self.challenges_issued = set()
-
-        # Only challenge when ADDING protection (current=none, new!=none)
-        if s["method"] != "none" or method_lower == "none":
-            return None
-
-        challenge_type = None
-        challenge_msg = None
-
-        # Challenge 1: consent=explicit face getting protection
-        if (s["element_type"] == "face"
-                and s.get("consent_status") == "explicit"):
-            challenge_type = "consent_explicit_face"
-            person = s.get("person_label", "unknown")
-            challenge_msg = (
-                f"CHALLENGE: This face (index={index}, label='{person}') has "
-                f"consent_status='explicit', meaning the face-matching database "
-                f"confirmed this person registered and granted explicit consent "
-                f"to appear unprotected. Phase 1 correctly set method='none'. "
-                f"Adding '{method_lower}' would override a verified consent decision. "
-                f"If you believe this is a MISIDENTIFICATION (wrong person matched), "
-                f"call modify_strategy again for index={index} with specific visual "
-                f"evidence explaining why the face match is incorrect."
-            )
-
-        # Challenge 2: LOW text label getting protection
-        elif (s["element_type"] == "text"
-                and s["severity"] == "low"):
-            challenge_type = "low_text_label"
-            challenge_msg = (
-                f"CHALLENGE: This text (index={index}, '{s['element_description']}') "
-                f"has severity=LOW and method='none', indicating Phase 1 classified "
-                f"it as a LABEL or descriptor (e.g., 'Password:', 'Bank Account:'). "
-                f"Labels describe what data is nearby but do NOT themselves contain "
-                f"sensitive information — only VALUES need protection. "
-                f"If you visually confirm this text contains ACTUAL SENSITIVE DATA "
-                f"(digits, passwords, account numbers — not just a label word), "
-                f"call modify_strategy again for index={index} explaining what "
-                f"specific sensitive data you see."
-            )
-
-        # Challenge 3: verified-OFF screen device getting protection
-        elif (s["element_type"] == "object"
-                and any(kw in s.get("element_description", "").lower()
-                        for kw in SCREEN_KEYWORDS)
-                and s.get("screen_state") == "verified_off"):
-            challenge_type = "verified_off_screen"
-            challenge_msg = (
-                f"CHALLENGE: This screen device (index={index}, "
-                f"'{s['element_description']}') has screen_state='verified_off'. "
-                f"Phase 1.5a VLM verification already examined a CROPPED close-up "
-                f"view of this specific device and determined: the screen is OFF, "
-                f"facing AWAY from the camera, or showing the device's BACK/LID. "
-                f"The screen content is NOT visible to the camera. "
-                f"Adding '{method_lower}' would protect a non-visible screen. "
-                f"If you believe the screen IS actually facing the camera AND shows "
-                f"readable sensitive content, call modify_strategy again for "
-                f"index={index} describing what specific content you see."
-            )
-
-        if challenge_type is None:
-            return None
-
-        key = (index, challenge_type)
-        if key in self.challenges_issued:
-            # Second call — VLM confirmed, allow through
-            self.challenges_issued.discard(key)
-            return None
-        else:
-            # First call — issue challenge
-            self.challenges_issued.add(key)
-            return json.dumps({
-                "status": "challenge",
-                "index": index,
-                "challenge_type": challenge_type,
-                "message": challenge_msg,
-            })
-
-    def _run(
-        self,
-        index: int,
-        method: str,
-        parameters: Dict[str, Any] = None,
-        reasoning: str = "VLM strategy review",
-    ) -> str:
-        if parameters is None:
-            parameters = {}
-
-        if index < 0 or index >= len(self.strategies):
-            return json.dumps({"status": "error", "message": f"Invalid index {index}, valid range: 0-{len(self.strategies)-1}"})
-
-        method_lower = method.lower().strip()
-        if method_lower not in VALID_METHODS:
-            return json.dumps({"status": "error", "message": f"Invalid method '{method}'. Valid: {sorted(VALID_METHODS)}"})
-
-        # Ethical mode guard
-        if self.allowed_methods and method_lower not in self.allowed_methods and method_lower != "none":
-            return json.dumps({"status": "blocked", "message": f"Method '{method}' not allowed in current ethical mode. Allowed: {self.allowed_methods}"})
-
-        s = self.strategies[index]
-
-        # Challenge-confirm: soft guard with VLM override on second call
-        challenge_result = self._check_challenge(index, s, method_lower)
-        if challenge_result is not None:
-            return challenge_result
-
-        # Guard: cannot weaken CRITICAL items
-        if s["severity"] == "critical":
-            old_strength = METHOD_STRENGTH.get(s["method"], 0)
-            new_strength = METHOD_STRENGTH.get(method_lower, 0)
-            if new_strength < old_strength:
-                return json.dumps({"status": "blocked", "message": f"Cannot weaken CRITICAL item from {s['method']} to {method_lower}"})
-
-        # Guard: cannot weaken HIGH severity text items
-        if s["severity"] == "high" and s["element_type"] == "text":
-            old_strength = METHOD_STRENGTH.get(s["method"], 0)
-            new_strength = METHOD_STRENGTH.get(method_lower, 0)
-            if new_strength < old_strength:
-                return json.dumps({"status": "blocked", "message": f"Cannot weaken HIGH severity text from {s['method']} to {method_lower}"})
-
-        # Guard: cannot remove protection for bystander faces
-        if s["element_type"] == "face" and s.get("consent_status") == "none" and method_lower == "none":
-            return json.dumps({"status": "blocked", "message": "Cannot remove protection for bystander face (consent=none)"})
-
-        # Guard: cannot set NONE for items that require protection
-        if s["requires_protection"] and method_lower == "none":
-            return json.dumps({"status": "blocked", "message": f"Cannot remove protection for item that requires_protection=True"})
-
-        old_method = s["method"]
-        s["method"] = method_lower
-        s["parameters"] = parameters
-        s["reasoning"] = f"{s['reasoning']} -> VLM: {reasoning}"
-        s["vlm_modified"] = True
-
-        return json.dumps({
-            "status": "modified",
-            "index": index,
-            "element": s["element_description"],
-            "old_method": old_method,
-            "new_method": method_lower,
-            "parameters": parameters,
-        })
-
-
-class BatchModifyStrategiesTool(BaseTool):
-    """Modify multiple strategies at once."""
-    name: str = "batch_modify_strategies"
-    description: str = (
-        "Modify obfuscation methods for multiple elements at once. "
-        "Provide a list of modifications, each with index, method, optional parameters, and reasoning."
-    )
-    args_schema: Type = BatchModifyStrategiesInput
-    handle_tool_error: bool = True
-    strategies: Any = None
-    allowed_methods: Any = None
-    challenges_issued: Any = None  # shared set() for challenge-confirm pattern
-
-    def _run(self, modifications: List[Dict]) -> str:
-        single_tool = ModifyStrategyTool(
-            strategies=self.strategies,
-            allowed_methods=self.allowed_methods,
-            challenges_issued=self.challenges_issued,
-        )
-        results = []
-        for mod in modifications:
-            if isinstance(mod, dict):
-                idx = mod.get("index", 0)
-                method = mod.get("method", "blur")
-                params = mod.get("parameters", {})
-                reason = mod.get("reasoning", "VLM batch review")
-            else:
-                idx = mod.index
-                method = mod.method
-                params = mod.parameters
-                reason = mod.reasoning
-            result = json.loads(single_tool._run(idx, method, params, reason))
-            results.append(result)
-        return json.dumps({"status": "batch_complete", "results": results})
-
-
-class GetCurrentStrategiesTool(BaseTool):
-    """View current strategy state."""
-    name: str = "get_current_strategies"
-    description: str = "View the current state of all proposed strategies. No arguments needed."
-    handle_tool_error: bool = True
-    strategies: Any = None
-
-    def _run(self, tool_input: str = "") -> str:
-        lines = []
-        for i, s in enumerate(self.strategies):
-            screen_info = ""
-            if s.get("screen_state"):
-                screen_info = f" | screen={s['screen_state']}"
-            lines.append(
-                f"[{i}] {s['element_type']} | {s['element_description'][:40]} | "
-                f"severity={s['severity']} | method={s['method']}{screen_info} | "
-                f"params={json.dumps(s.get('parameters', {}))}"
-            )
-        return "\n".join(lines)
-
-
-class FinalizeStrategiesTool(BaseTool):
-    """Finalize all strategies."""
-    name: str = "finalize_strategies"
-    description: str = "Finalize all strategies after review. Call this when done reviewing. No arguments needed."
-    handle_tool_error: bool = True
-    strategies: Any = None
-    already_finalized: bool = False
-
-    def _run(self, tool_input: str = "") -> str:
-        if self.already_finalized:
-            return json.dumps({"status": "already_finalized", "message": "Strategies already finalized"})
-
-        self.already_finalized = True
-        method_counts = {}
-        for s in self.strategies:
-            m = s["method"]
-            method_counts[m] = method_counts.get(m, 0) + 1
-
-        return json.dumps({
-            "status": "finalized",
-            "total_strategies": len(self.strategies),
-            "method_breakdown": method_counts,
-            "message": "All strategies finalized. Review complete.",
-        })
-
-
-## Execution Agent Tools (Phase 2 — VLM Verification)
-
-
-class PatchRegionTool(BaseTool):
-    """Strengthen or re-apply protection for a leaking element."""
-    name: str = "patch_region"
-    description: str = (
-        "Strengthen protection for an element that is still partially visible. "
-        "Provide the detection_id (from protection status), a stronger method, "
-        "optional parameters (kernel_size, block_size), expand_px to widen coverage, "
-        "and reasoning for what you still see."
-    )
-    args_schema: Type = PatchRegionInput
-    handle_tool_error: bool = True
-    image: Any = None          # shared PIL Image (mutated in-place)
-    bbox_lookup: Any = None    # detection_id -> BoundingBox
-    transformations: Any = None  # list of transformation dicts from Phase 1
-    patches_applied: Any = None  # list to track Phase 2 patches
-
-    def _run(
-        self,
-        detection_id: str,
-        method: str,
-        parameters: Dict[str, Any] = None,
-        expand_px: int = 0,
-        reasoning: str = "VLM verification",
-    ) -> str:
-        if parameters is None:
-            parameters = {}
-
-        method_lower = method.lower().strip()
-        if method_lower not in {"blur", "pixelate", "solid_overlay"}:
-            return json.dumps({"status": "error", "message": f"Invalid method '{method}'. Use: blur, pixelate, solid_overlay"})
-
-        if method_lower == "none":
-            return json.dumps({"status": "error", "message": "Cannot set method to 'none' — patch_region only strengthens protection"})
-
-        bbox = self.bbox_lookup.get(detection_id)
-        if bbox is None:
-            return json.dumps({"status": "error", "message": f"Unknown detection_id '{detection_id}'. Use get_protection_status to see valid IDs."})
-
-        # Expand bbox
-        expand_px = max(0, min(expand_px, 30))
-        x = max(0, bbox.x - expand_px)
-        y = max(0, bbox.y - expand_px)
-        w = min(self.image.width - x, bbox.width + 2 * expand_px)
-        h = min(self.image.height - y, bbox.height + 2 * expand_px)
-
-        method_enum = ObfuscationMethod(method_lower)
-
-        # Set default params if not provided
-        if not parameters:
-            if method_lower == "blur":
-                parameters = {"kernel_size": 35}
-            elif method_lower == "pixelate":
-                parameters = {"block_size": 8}
-            elif method_lower == "solid_overlay":
-                parameters = {"color": "black"}
-
-        _apply_obfuscation_bbox(self.image, x, y, w, h, method_enum, parameters)
-
-        patch_record = {
-            "detection_id": detection_id,
-            "method": method_lower,
-            "parameters": parameters,
-            "expand_px": expand_px,
-            "bbox": [x, y, w, h],
-            "reasoning": reasoning,
-        }
-        self.patches_applied.append(patch_record)
-
-        # Find original method for logging
-        orig_method = "unknown"
-        for t in self.transformations:
-            if t.get("detection_id") == detection_id:
-                orig_method = t.get("method", "unknown")
-                break
-
-        print(f"    PATCH: {detection_id[:8]} {orig_method} → {method_lower} "
-              f"(+{expand_px}px) — {reasoning[:60]}")
-
-        return json.dumps({
-            "status": "patched",
-            "detection_id": detection_id,
-            "old_method": orig_method,
-            "new_method": method_lower,
-            "parameters": parameters,
-            "expanded_by": expand_px,
-        })
-
-
-class AddProtectionTool(BaseTool):
-    """Add protection to a region missed by the detection pipeline."""
-    name: str = "add_protection"
-    description: str = (
-        "Add protection to a NEW region not covered by any existing transformation. "
-        "Use this ONLY for leaked content that was completely missed by the detection pipeline. "
-        "Provide x, y, width, height coordinates, method, and reasoning."
-    )
-    args_schema: Type = AddProtectionInput
-    handle_tool_error: bool = True
-    image: Any = None
-    patches_applied: Any = None
-
-    def _run(
-        self,
-        x: int, y: int, width: int, height: int,
-        method: str,
-        parameters: Dict[str, Any] = None,
-        reasoning: str = "VLM found missed content",
-    ) -> str:
-        if parameters is None:
-            parameters = {}
-
-        method_lower = method.lower().strip()
-        if method_lower not in {"blur", "pixelate", "solid_overlay"}:
-            return json.dumps({"status": "error", "message": f"Invalid method '{method}'. Use: blur, pixelate, solid_overlay"})
-
-        # Validate region
-        if width < 10 or height < 10:
-            return json.dumps({"status": "error", "message": f"Region too small ({width}x{height}). Minimum 10x10."})
-
-        x = max(0, min(x, self.image.width - 10))
-        y = max(0, min(y, self.image.height - 10))
-        width = min(width, self.image.width - x)
-        height = min(height, self.image.height - y)
-
-        if not parameters:
-            if method_lower == "blur":
-                parameters = {"kernel_size": 35}
-            elif method_lower == "pixelate":
-                parameters = {"block_size": 8}
-            elif method_lower == "solid_overlay":
-                parameters = {"color": "black"}
-
-        method_enum = ObfuscationMethod(method_lower)
-        _apply_obfuscation_bbox(self.image, x, y, width, height, method_enum, parameters)
-
-        patch_record = {
-            "detection_id": "vlm_added",
-            "method": method_lower,
-            "parameters": parameters,
-            "bbox": [x, y, width, height],
-            "reasoning": reasoning,
-        }
-        self.patches_applied.append(patch_record)
-
-        print(f"    ADD:   [{x},{y},{width},{height}] {method_lower} — {reasoning[:60]}")
-
-        return json.dumps({
-            "status": "added",
-            "region": [x, y, width, height],
-            "method": method_lower,
-            "parameters": parameters,
-        })
-
-
-class GetProtectionStatusTool(BaseTool):
-    """View current protection status of all elements."""
-    name: str = "get_protection_status"
-    description: str = (
-        "View what protections have been applied to each element. "
-        "Shows detection_id, element description, method, bbox, and whether "
-        "it was already patched. No arguments needed."
-    )
-    handle_tool_error: bool = True
-    transformations: Any = None
-    patches_applied: Any = None
-
-    def _run(self, tool_input: str = "") -> str:
-        patched_ids = {p["detection_id"] for p in self.patches_applied}
-
-        lines = []
-        for t in self.transformations:
-            det_id = t.get("detection_id", "?")
-            patched = " [PATCHED]" if det_id in patched_ids else ""
-            lines.append(
-                f"  {det_id[:12]:12} | {t.get('element', '?')[:35]:35} | "
-                f"method={t.get('method', '?'):15} | "
-                f"bbox={t.get('bbox', '?')}{patched}"
-            )
-
-        return f"Protected elements ({len(self.transformations)}):\n" + "\n".join(lines)
-
-
-class FinalizeVerificationTool(BaseTool):
-    """Finalize the verification check."""
-    name: str = "finalize_verification"
-    description: str = (
-        "Finalize verification after checking all protections. "
-        "Call this when all leaks have been patched or no leaks were found. "
-        "No arguments needed."
-    )
-    handle_tool_error: bool = True
-    patches_applied: Any = None
-    already_finalized: bool = False
-
-    def _run(self, tool_input: str = "") -> str:
-        if self.already_finalized:
-            return json.dumps({"status": "already_finalized", "message": "Verification already complete."})
-
-        self.already_finalized = True
-        return json.dumps({
-            "status": "verification_complete",
-            "patches_applied": len(self.patches_applied),
-            "message": "Verification finalized. Do NOT call any more tools.",
         })

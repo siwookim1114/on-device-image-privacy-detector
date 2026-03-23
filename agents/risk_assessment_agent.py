@@ -19,6 +19,7 @@ from utils.models import (
     BoundingBox
 )
 from agents.local_wrapper import VisionLLM
+from agents.agent_factory import get_vlm_config, resize_for_vlm, build_vlm_agent
 from utils.config import get_risk_color
 from agents.tools import (
     FaceRiskAssessmentTool,
@@ -84,13 +85,8 @@ class RiskAssessmentAgent:
         self.vlm_backend = vlm_backend
         self.vlm_model = self._get_vlm_model()
 
-        # Backend-specific config
-        backend_config = {
-            "llama-cpp": {"base_url": "http://localhost:8081"},
-            "ollama": {"base_url": "http://localhost:11434"},
-            "mlx": {"base_url": "http://localhost:8000"},
-        }
-        base_url = backend_config.get(vlm_backend, backend_config["mlx"])["base_url"]
+        # Backend-specific config (shared factory)
+        base_url, _ = get_vlm_config(vlm_backend, default_backend="mlx")
 
         # VLM for Phase 2 agentic review
         self.vlm = VisionLLM(
@@ -101,6 +97,16 @@ class RiskAssessmentAgent:
 
         # Phase 1 deterministic tools
         self.tools = self._get_tools()
+
+        # Named references to Phase 1 tools (avoids fragile numeric indexing)
+        self.face_risk_tool = self.tools[0]
+        self.text_risk_tool = self.tools[1]
+        self.object_risk_tool = self.tools[2]
+        self.spatial_tool = self.tools[3]
+        self.consent_tool = self.tools[4]
+        self.escalation_tool = self.tools[5]
+        self.filter_tool = self.tools[6]
+        self.validation_tool = self.tools[7]
 
         print(f"\n[RiskAssessmentAgent] Initialized")
         print(f"  Phase 1: Deterministic tool-based assessment")
@@ -287,19 +293,19 @@ class RiskAssessmentAgent:
             face_dict["image_width"] = image_context["width"]
             face_dict["image_height"] = image_context["height"]
 
-            result = self.tools[0]._run(json.dumps(face_dict))  # FaceRiskAssessmentTool
+            result = self.face_risk_tool._run(json.dumps(face_dict))
             assessment = json.loads(result)
             if "error" not in assessment:
                 assessments.append(assessment)
 
         for text in detections.text_regions:
-            result = self.tools[1]._run(json.dumps(text.model_dump()))  # TextRiskAssessmentTool
+            result = self.text_risk_tool._run(json.dumps(text.model_dump()))
             assessment = json.loads(result)
             if "error" not in assessment:
                 assessments.append(assessment)
 
         for obj in detections.objects:
-            result = self.tools[2]._run(json.dumps(obj.model_dump()))  # ObjectRiskAssessmentTool
+            result = self.object_risk_tool._run(json.dumps(obj.model_dump()))
             assessment = json.loads(result)
             if "error" not in assessment and not assessment.get("filtered", False):
                 assessments.append(assessment)
@@ -318,20 +324,20 @@ class RiskAssessmentAgent:
                 "image_width": image_context["width"],
                 "image_height": image_context["height"],
             }
-            spatial_result = self.tools[3]._run(json.dumps(detections_dict))  # SpatialRelationshipTool
+            spatial_result = self.spatial_tool._run(json.dumps(detections_dict))
             spatial_data = json.loads(spatial_result)
 
             escalations = spatial_data.get("escalations", [])
             if escalations:
                 escalation_input = {"assessments": assessments, "escalations": escalations}
-                esc_result = self.tools[5]._run(json.dumps(escalation_input))  # RiskEscalationTool
+                esc_result = self.escalation_tool._run(json.dumps(escalation_input))
                 assessments = json.loads(esc_result).get("assessments", assessments)
 
         # Step 3: Filter + validate
-        filter_result = self.tools[6]._run(json.dumps({"assessments": assessments}))  # FalsePositiveFilterTool
+        filter_result = self.filter_tool._run(json.dumps({"assessments": assessments}))
         assessments = json.loads(filter_result).get("assessments", assessments)
 
-        validation_result = self.tools[7]._run(json.dumps({"assessments": assessments}))  # ConsistencyValidationTool
+        validation_result = self.validation_tool._run(json.dumps({"assessments": assessments}))
         assessments = json.loads(validation_result).get("assessments", assessments)
 
         return assessments
@@ -368,11 +374,8 @@ class RiskAssessmentAgent:
         print(f"\n  Screen verification ({len(screen_assessments)} devices):")
 
         for a in screen_assessments:
-            bbox = a.get("bbox", [0, 0, 0, 0])
-            if isinstance(bbox, list):
-                x, y, w, h = bbox
-            else:
-                x, y, w, h = bbox["x"], bbox["y"], bbox["width"], bbox["height"]
+            _bbox = BoundingBox.from_raw(a.get("bbox", [0, 0, 0, 0]))
+            x, y, w, h = _bbox.x, _bbox.y, _bbox.width, _bbox.height
 
             # Use TOP 60% of bbox only — this isolates the screen area
             # and excludes keyboard/trackpad which confuses VLM
@@ -386,10 +389,7 @@ class RiskAssessmentAgent:
             ))
 
             # Resize crop to max 512px for VLM
-            cw, ch = crop.size
-            if max(cw, ch) > 512:
-                scale = 512 / max(cw, ch)
-                crop = crop.resize((int(cw * scale), int(ch * scale)), Image.LANCZOS)
+            crop = resize_for_vlm(crop, max_dim=512)
 
             try:
                 crop_b64 = self.vlm._image_to_base64(crop)
@@ -482,7 +482,7 @@ class RiskAssessmentAgent:
                 continue
 
             # Determine value risk level using Phase 1 tool
-            text_tool = self.tools[1]  # TextRiskAssessmentTool
+            text_tool = self.text_risk_tool
             # Classify value part by running it through the text risk assessment pipeline:
             # create a minimal text dict to get a risk assessment
             value_clean = re.sub(r'[\s\-]', '', value_part)
@@ -514,11 +514,8 @@ class RiskAssessmentAgent:
                 continue
 
             # Split bbox proportionally based on colon position
-            bbox_raw = a.get("bbox", [0, 0, 0, 0])
-            if isinstance(bbox_raw, dict):
-                ox, oy, ow, oh = bbox_raw["x"], bbox_raw["y"], bbox_raw["width"], bbox_raw["height"]
-            else:
-                ox, oy, ow, oh = bbox_raw
+            _bbox = BoundingBox.from_raw(a.get("bbox", [0, 0, 0, 0]))
+            ox, oy, ow, oh = _bbox.x, _bbox.y, _bbox.width, _bbox.height
 
             colon_pos = raw.index(":")
             ratio = (colon_pos + 2) / max(len(raw), 1)  # +2 for ": "
@@ -596,12 +593,7 @@ class RiskAssessmentAgent:
         phase2_tools = all_tools[len(self.tools):]
 
         # Resize image for VLM — 1024px gives enough detail for screen state assessment
-        max_dim = 1024
-        w, h = annotated_image.size
-        if max(w, h) > max_dim:
-            scale = max_dim / max(w, h)
-            new_w, new_h = int(w * scale), int(h * scale)
-            annotated_image = annotated_image.resize((new_w, new_h), Image.LANCZOS)
+        annotated_image = resize_for_vlm(annotated_image, max_dim=1024)
 
         # Encode image for multimodal prompt
         image_b64 = self.vlm._image_to_base64(annotated_image)
@@ -651,22 +643,13 @@ class RiskAssessmentAgent:
         # Keeps the first message (image + assessments) and last 12 messages
         # (6 tool call/result pairs). The model only sees trimmed messages;
         # state retains the full history.
-        class MessageTrimMiddleware(AgentMiddleware):
-            def wrap_model_call(self, request, handler):
-                messages = request.messages
-                if len(messages) > 14:
-                    trimmed = [messages[0]] + messages[-12:]
-                    return handler(request.override(messages=trimmed))
-                return handler(request)
-
-        agent = create_agent(
-            model=self.vlm.llm,
+        agent = build_vlm_agent(
+            vlm=self.vlm,
             tools=phase2_tools,
             system_prompt=system_prompt,
-            middleware=[
-                MessageTrimMiddleware(),
-                ModelCallLimitMiddleware(run_limit=max_iters),
-            ],
+            max_iters=max_iters,
+            trim_threshold=14,
+            trim_keep=12,
         )
 
         print(f"  Phase 2 LangGraph agent built:")
@@ -685,11 +668,8 @@ class RiskAssessmentAgent:
         """
         lines = []
         for i, a in enumerate(assessments):
-            bbox_raw = a.get("bbox", [0, 0, 0, 0])
-            if isinstance(bbox_raw, dict):
-                bbox_display = f"[{bbox_raw.get('x', 0)}, {bbox_raw.get('y', 0)}, {bbox_raw.get('width', 0)}, {bbox_raw.get('height', 0)}]"
-            else:
-                bbox_display = str(bbox_raw)
+            bbox_parsed = BoundingBox.from_raw(a.get("bbox", [0, 0, 0, 0]))
+            bbox_display = str(bbox_parsed.to_list())
 
             parts = [
                 f"[{i}] {a.get('element_type', '?')}",
@@ -808,24 +788,11 @@ class RiskAssessmentAgent:
 
         for d in assessment_dicts:
             try:
-                # Handle bbox as both list and dict
-                bbox_raw = d.get("bbox", [0, 0, 0, 0])
-                if isinstance(bbox_raw, dict):
-                    bbox = BoundingBox(**bbox_raw)
-                elif isinstance(bbox_raw, list):
-                    bbox = BoundingBox(x=bbox_raw[0], y=bbox_raw[1], width=bbox_raw[2], height=bbox_raw[3])
-                else:
-                    bbox = BoundingBox(x=0, y=0, width=0, height=0)
+                bbox = BoundingBox.from_raw(d.get("bbox", [0, 0, 0, 0]))
 
                 # Handle screen_bbox if present (screen devices only)
                 screen_bbox_raw = d.get("screen_bbox")
-                screen_bbox = None
-                if screen_bbox_raw is not None:
-                    if isinstance(screen_bbox_raw, dict):
-                        screen_bbox = BoundingBox(**screen_bbox_raw)
-                    elif isinstance(screen_bbox_raw, list) and len(screen_bbox_raw) == 4:
-                        screen_bbox = BoundingBox(x=screen_bbox_raw[0], y=screen_bbox_raw[1],
-                                                  width=screen_bbox_raw[2], height=screen_bbox_raw[3])
+                screen_bbox = BoundingBox.from_raw(screen_bbox_raw) if screen_bbox_raw is not None else None
 
                 risk_assessment = RiskAssessment(
                     detection_id=d.get("detection_id", "unknown"),

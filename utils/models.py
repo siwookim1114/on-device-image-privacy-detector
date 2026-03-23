@@ -122,6 +122,24 @@ class BoundingBox(BaseModel):
     width: int
     height: int
 
+    @classmethod
+    def from_raw(cls, data) -> "BoundingBox":
+        """Parse a BoundingBox from dict, list, or existing BoundingBox.
+
+        Accepts:
+          - dict with keys x, y, width, height
+          - list/tuple of [x, y, width, height]
+          - an existing BoundingBox instance (returned as-is)
+          - anything else returns a zero-area bbox
+        """
+        if isinstance(data, cls):
+            return data
+        if isinstance(data, dict):
+            return cls(**data)
+        if isinstance(data, (list, tuple)) and len(data) >= 4:
+            return cls(x=data[0], y=data[1], width=data[2], height=data[3])
+        return cls(x=0, y=0, width=0, height=0)
+
     def to_list(self) -> List[int]:
         """Convert to [x, y, w, h] list"""
         return [self.x, self.y, self.width, self.height]

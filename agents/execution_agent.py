@@ -48,6 +48,7 @@ from utils.models import (
 )
 from utils.visualization import _apply_obfuscation_bbox, _apply_obfuscation_mask
 from agents.local_wrapper import VisionLLM
+from agents.agent_factory import create_vlm, resize_for_vlm, build_vlm_agent
 from agents.tools import (
     PatchRegionTool,
     AddProtectionTool,
@@ -73,25 +74,7 @@ class ExecutionAgent:
         self.vlm_model = None
 
         if vlm_backend:
-            backend_config = {
-                "llama-cpp": {"base_url": "http://localhost:8081"},
-                "ollama": {"base_url": "http://localhost:11434"},
-                "mlx": {"base_url": "http://localhost:8000"},
-            }
-            base_url = backend_config.get(vlm_backend, backend_config["llama-cpp"])["base_url"]
-
-            if vlm_backend == "llama-cpp":
-                self.vlm_model = "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf"
-            elif vlm_backend == "mlx":
-                self.vlm_model = "mlx-community/Qwen3-VL-8B-Instruct-4bit"
-            else:
-                self.vlm_model = "qwen3-vl:30b-a3b"
-
-            self.vlm = VisionLLM(
-                model=self.vlm_model,
-                base_url=base_url,
-                backend=vlm_backend,
-            )
+            self.vlm, self.vlm_model = create_vlm(vlm_backend)
 
         print(f"\n[ExecutionAgent] Initialized")
         print(f"  Phase 1: Deterministic execution (blur, pixelate, solid_overlay)")
@@ -299,14 +282,7 @@ class ExecutionAgent:
 
         try:
             # Resize for VLM (max 1024px)
-            vlm_image = image.copy()
-            max_dim = 1024
-            w, h = vlm_image.size
-            if max(w, h) > max_dim:
-                scale = max_dim / max(w, h)
-                vlm_image = vlm_image.resize(
-                    (int(w * scale), int(h * scale)), Image.LANCZOS
-                )
+            vlm_image = resize_for_vlm(image.copy(), max_dim=1024)
 
             image_b64 = self.vlm._image_to_base64(vlm_image)
 
@@ -441,22 +417,13 @@ class ExecutionAgent:
             "Do NOT use <think> tags or internal reasoning. Act immediately."
         )
 
-        class MessageTrimMiddleware(AgentMiddleware):
-            def wrap_model_call(self, request, handler):
-                messages = request.messages
-                if len(messages) > 10:
-                    trimmed = [messages[0]] + messages[-8:]
-                    return handler(request.override(messages=trimmed))
-                return handler(request)
-
-        agent = create_agent(
-            model=self.vlm.llm,
+        agent = build_vlm_agent(
+            vlm=self.vlm,
             tools=tools,
             system_prompt=system_prompt,
-            middleware=[
-                MessageTrimMiddleware(),
-                ModelCallLimitMiddleware(run_limit=max_iters),
-            ],
+            max_iters=max_iters,
+            trim_threshold=10,
+            trim_keep=8,
         )
 
         print(f"  Phase 2 agent built:")
