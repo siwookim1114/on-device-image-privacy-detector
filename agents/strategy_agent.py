@@ -289,7 +289,7 @@ class StrategyAgent:
         MessageTrimMiddleware keeps context within VLM limits.
         ModelCallLimitMiddleware caps iterations.
         """
-        shared_challenges = set()
+        shared_challenges = {}
 
         phase2_tools = [
             ModifyStrategyTool(

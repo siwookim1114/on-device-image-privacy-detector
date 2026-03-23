@@ -30,16 +30,16 @@ class ModifyStrategyTool(BaseTool):
     handle_tool_error: bool = True
     strategies: Any = None
     allowed_methods: Any = None
-    challenges_issued: Any = None  # shared set() for challenge-confirm pattern
+    challenges_issued: Any = None  # shared dict() for challenge-confirm: {(index, type): first_reasoning}
 
-    def _check_challenge(self, index: int, s: dict, method_lower: str) -> Optional[str]:
+    def _check_challenge(self, index: int, s: dict, method_lower: str, reasoning: str = "") -> Optional[str]:
         """
         Challenge-confirm pattern: return a warning on first attempt to add
         protection to items that likely don't need it. If the VLM calls again
         for the same item, allow through (VLM confirmed its decision).
         """
         if self.challenges_issued is None:
-            self.challenges_issued = set()
+            self.challenges_issued = {}
 
         # Only challenge when ADDING protection (current=none, new!=none)
         if s["method"] != "none" or method_lower == "none":
@@ -104,12 +104,27 @@ class ModifyStrategyTool(BaseTool):
 
         key = (index, challenge_type)
         if key in self.challenges_issued:
-            # Second call — VLM confirmed, allow through
-            self.challenges_issued.discard(key)
+            previous_reasoning = self.challenges_issued[key]
+            # Second call — only allow if VLM provided DIFFERENT reasoning
+            if reasoning.strip() == previous_reasoning.strip():
+                # Same reasoning — re-issue challenge, do NOT consume
+                return json.dumps({
+                    "status": "challenge",
+                    "index": index,
+                    "challenge_type": challenge_type,
+                    "message": (
+                        f"{challenge_msg} "
+                        f"NOTE: Your reasoning is identical to your previous attempt. "
+                        f"Please provide DIFFERENT reasoning explaining what specific "
+                        f"visual evidence you see that justifies this override."
+                    ),
+                })
+            # Different reasoning — VLM confirmed with new justification, allow through
+            del self.challenges_issued[key]
             return None
         else:
-            # First call — issue challenge
-            self.challenges_issued.add(key)
+            # First call — issue challenge, store the reasoning used
+            self.challenges_issued[key] = reasoning
             return json.dumps({
                 "status": "challenge",
                 "index": index,
@@ -141,7 +156,7 @@ class ModifyStrategyTool(BaseTool):
         s = self.strategies[index]
 
         # Challenge-confirm: soft guard with VLM override on second call
-        challenge_result = self._check_challenge(index, s, method_lower)
+        challenge_result = self._check_challenge(index, s, method_lower, reasoning)
         if challenge_result is not None:
             return challenge_result
 
@@ -194,7 +209,7 @@ class BatchModifyStrategiesTool(BaseTool):
     handle_tool_error: bool = True
     strategies: Any = None
     allowed_methods: Any = None
-    challenges_issued: Any = None  # shared set() for challenge-confirm pattern
+    challenges_issued: Any = None  # shared dict() for challenge-confirm: {(index, type): first_reasoning}
 
     def _run(self, modifications: List[Dict]) -> str:
         single_tool = ModifyStrategyTool(

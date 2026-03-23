@@ -439,7 +439,7 @@ class TextDetectionTool(BaseTool):
         c2y = bbox2[1] + bbox2[3] / 2
         return ((c1x - c2x) ** 2 + (c1y - c2y) ** 2) ** 0.5
 
-    def _propagate_labels_to_values(self, texts: List[Dict]) -> None:
+    def _propagate_labels_to_values(self, texts: List[Dict], img_width: int = 2000, img_height: int = 2000) -> None:
         """
         Second pass: Propagate label classifications to nearby unclassified values.
 
@@ -494,9 +494,11 @@ class TextDetectionTool(BaseTool):
                 text_cy = text["bbox"][1] + text["bbox"][3] / 2
                 vertical_dist = abs(label_cy - text_cy)
 
-                # Same row (within 50px vertically): allow 400px horizontal distance
-                # Different row: use standard 200px threshold
-                threshold = 400 if vertical_dist < 50 else 200
+                # Same row (within 50px vertically): allow 20% of image width
+                # Different row: allow 10% of image height
+                same_row_threshold = int(img_width * 0.20)
+                diff_row_threshold = int(img_height * 0.10)
+                threshold = same_row_threshold if vertical_dist < 50 else diff_row_threshold
 
                 if dist < threshold:
                     text["text_type"] = value_type
@@ -527,7 +529,15 @@ class TextDetectionTool(BaseTool):
         if not labels:
             return []
 
+        try:
+            image = Image.open(image_path)
+            img_w, img_h = image.size
+        except Exception:
+            return []
+
         # Find labels that have no nearby classified value
+        same_row_thresh = int(img_w * 0.20)
+        diff_row_thresh = int(img_h * 0.10)
         labels_without_values = []
         for label in labels:
             has_value = False
@@ -539,7 +549,7 @@ class TextDetectionTool(BaseTool):
                 label_cy = label["bbox"][1] + label["bbox"][3] / 2
                 text_cy = t["bbox"][1] + t["bbox"][3] / 2
                 dist = self._bbox_distance(label["bbox"], t["bbox"])
-                threshold = 400 if abs(label_cy - text_cy) < 50 else 200
+                threshold = same_row_thresh if abs(label_cy - text_cy) < 50 else diff_row_thresh
                 if dist < threshold:
                     has_value = True
                     break
@@ -547,12 +557,6 @@ class TextDetectionTool(BaseTool):
                 labels_without_values.append(label)
 
         if not labels_without_values:
-            return []
-
-        try:
-            image = Image.open(image_path)
-            img_w, img_h = image.size
-        except Exception:
             return []
 
         LABEL_WORDS = {
@@ -566,70 +570,87 @@ class TextDetectionTool(BaseTool):
         for label in labels_without_values:
             lx, ly, lw, lh = label["bbox"]
 
-            # Search region: to the right of the label, padded vertically
-            search_x = lx + lw
-            search_y = max(0, ly - int(lh * 0.5))
-            search_x2 = min(search_x + lw * 4, img_w)
-            search_y2 = min(search_y + lh * 2, img_h)
+            # Search in all 4 directions: right, below, left, above
+            search_regions = [
+                # Right of label
+                (lx + lw, max(0, ly - int(lh * 0.5)),
+                 min(lx + lw + lw * 4, img_w), min(ly + int(lh * 1.5), img_h)),
+                # Below label
+                (max(0, lx - int(lw * 0.5)), ly + lh,
+                 min(lx + int(lw * 1.5), img_w), min(ly + lh + lh * 4, img_h)),
+                # Left of label
+                (max(0, lx - lw * 4), max(0, ly - int(lh * 0.5)),
+                 lx, min(ly + int(lh * 1.5), img_h)),
+                # Above label
+                (max(0, lx - int(lw * 0.5)), max(0, ly - lh * 4),
+                 min(lx + int(lw * 1.5), img_w), ly),
+            ]
 
-            if search_x2 - search_x < 15 or search_y2 - search_y < 10:
-                continue
+            found_value_for_label = False
+            for search_x, search_y, search_x2, search_y2 in search_regions:
+                if found_value_for_label:
+                    break
 
-            try:
-                crop = image.crop((search_x, search_y, search_x2, search_y2))
-                crop_array = np.array(crop)
+                if search_x2 - search_x < 15 or search_y2 - search_y < 10:
+                    continue
 
-                ocr_results = self.detector.readtext(
-                    crop_array, width_ths=0.1, paragraph=False
-                )
+                try:
+                    crop = image.crop((search_x, search_y, search_x2, search_y2))
+                    crop_array = np.array(crop)
 
-                for (box_pts, text_content, conf) in ocr_results:
-                    if conf < 0.25 or len(text_content.strip()) < 2:
-                        continue
+                    ocr_results = self.detector.readtext(
+                        crop_array, width_ths=0.1, paragraph=False
+                    )
 
-                    # Skip label words
-                    clean = re.sub(r'[:\s\-_.,;]', '', text_content).lower()
-                    if clean in LABEL_WORDS:
-                        continue
+                    for (box_pts, text_content, conf) in ocr_results:
+                        if conf < 0.25 or len(text_content.strip()) < 2:
+                            continue
 
-                    # Convert local coords back to image coords
-                    pts = np.array(box_pts)
-                    min_x = int(pts[:, 0].min()) + search_x
-                    min_y = int(pts[:, 1].min()) + search_y
-                    max_x = int(pts[:, 0].max()) + search_x
-                    max_y = int(pts[:, 1].max()) + search_y
-                    new_bbox = [min_x, min_y, max_x - min_x, max_y - min_y]
+                        # Skip label words
+                        clean = re.sub(r'[:\s\-_.,;]', '', text_content).lower()
+                        if clean in LABEL_WORDS:
+                            continue
 
-                    # Check for overlap with existing detections
-                    overlaps = False
-                    for existing in texts + new_texts:
-                        ex, ey, ew, eh = existing["bbox"]
-                        if (min_x < ex + ew and max_x > ex and
-                                min_y < ey + eh and max_y > ey):
-                            overlaps = True
-                            break
-                    if overlaps:
-                        continue
+                        # Convert local coords back to image coords
+                        pts = np.array(box_pts)
+                        min_x = int(pts[:, 0].min()) + search_x
+                        min_y = int(pts[:, 1].min()) + search_y
+                        max_x = int(pts[:, 0].max()) + search_x
+                        max_y = int(pts[:, 1].max()) + search_y
+                        new_bbox = [min_x, min_y, max_x - min_x, max_y - min_y]
 
-                    value_type, is_critical = LABEL_TO_VALUE[label["text_type"]]
+                        # Check for overlap with existing detections
+                        overlaps = False
+                        for existing in texts + new_texts:
+                            ex, ey, ew, eh = existing["bbox"]
+                            if (min_x < ex + ew and max_x > ex and
+                                    min_y < ey + eh and max_y > ey):
+                                overlaps = True
+                                break
+                        if overlaps:
+                            continue
 
-                    new_texts.append({
-                        "id": f"text_recrop_{next_id}",
-                        "text_content": text_content,
-                        "bbox": new_bbox,
-                        "confidence": float(conf),
-                        "text_type": value_type,
-                        "is_sensitive": True,
-                        "is_pii": True,
-                        "is_critical": is_critical,
-                        "is_label_only": False,
-                    })
-                    next_id += 1
-                    print(f"    RECROP: Found '{text_content}' near "
-                          f"'{label.get('text_content', '')}' → {value_type}")
+                        value_type, is_critical = LABEL_TO_VALUE[label["text_type"]]
 
-            except Exception as e:
-                print(f"    RECROP ERROR near '{label.get('text_content', '')}': {e}")
+                        new_texts.append({
+                            "id": f"text_recrop_{next_id}",
+                            "text_content": text_content,
+                            "bbox": new_bbox,
+                            "confidence": float(conf),
+                            "text_type": value_type,
+                            "is_sensitive": True,
+                            "is_pii": True,
+                            "is_critical": is_critical,
+                            "is_label_only": False,
+                        })
+                        next_id += 1
+                        found_value_for_label = True
+                        print(f"    RECROP: Found '{text_content}' near "
+                              f"'{label.get('text_content', '')}' → {value_type}")
+                        break  # One value per label per direction search
+
+                except Exception as e:
+                    print(f"    RECROP ERROR near '{label.get('text_content', '')}': {e}")
 
         return new_texts
 
@@ -674,7 +695,8 @@ class TextDetectionTool(BaseTool):
                 })
 
             # Second pass: propagate label classifications to nearby unclassified values
-            self._propagate_labels_to_values(texts)
+            img_width, img_height = image.size
+            self._propagate_labels_to_values(texts, img_width, img_height)
 
             # Third pass: find missing values near labels via targeted re-crop
             new_values = self._find_missing_values(texts, image_path)
@@ -772,6 +794,7 @@ class ObjectDetectionTool(BaseTool):
             )
 
             objects = []
+            person_bboxes = []
             for result in results:
                 boxes = result.boxes
                 if boxes is None:
@@ -783,6 +806,11 @@ class ObjectDetectionTool(BaseTool):
                     class_name = result.names[class_id]
                     confidence = float(box.conf[0])
 
+                    # Collect person bboxes separately for face cross-referencing
+                    if class_name.lower() == "person":
+                        person_bboxes.append([x1, y1, x2 - x1, y2 - y1])
+                        continue
+
                     # Check privacy relevance
                     is_relevant = self._is_privacy_relevant(class_name)
                     risk_category = self._get_risk_category(class_name)
@@ -791,7 +819,7 @@ class ObjectDetectionTool(BaseTool):
                     if is_relevant:
                         objects.append({
                             "id": f"obj_{len(objects)}",
-                            "label": class_name,  # Changed from "class" to "label"
+                            "label": class_name,
                             "bbox": [x1, y1, x2 - x1, y2 - y1],
                             "confidence": confidence,
                             "is_privacy_relevant": is_relevant,
@@ -803,7 +831,9 @@ class ObjectDetectionTool(BaseTool):
                 "objects": objects,
                 "count": len(objects),
                 "privacy_relevant_count": sum(1 for o in objects if o["is_privacy_relevant"]),
-                "screen_count": sum(1 for o in objects if o.get("contains_screen", False))
+                "screen_count": sum(1 for o in objects if o.get("contains_screen", False)),
+                "person_bboxes": person_bboxes,
+                "person_count": len(person_bboxes)
             })
 
         except Exception as e:

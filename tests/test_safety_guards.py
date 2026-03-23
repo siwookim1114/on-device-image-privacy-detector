@@ -3,8 +3,6 @@ Unit tests for safety guards, text classification, and challenge-confirm pattern
 
 These tests run WITHOUT any ML models (no MTCNN, EasyOCR, YOLO, VLM server).
 They test pure logic functions and tool guards using synthetic data.
-
-Run: conda run -n lab_env python3 -m pytest tests/test_safety_guards.py -v
 """
 
 import sys
@@ -232,7 +230,7 @@ class TestChallengeConfirm:
     def _make_tool(self, strategies, challenges=None):
         from agents.tools import ModifyStrategyTool
         if challenges is None:
-            challenges = set()
+            challenges = {}
         return ModifyStrategyTool(
             strategies=strategies,
             allowed_methods=["blur", "pixelate", "solid_overlay"],
@@ -270,7 +268,7 @@ class TestChallengeConfirm:
             "reasoning": "User's own face (explicit consent)",
             "screen_state": None,
         }]
-        challenges = set()
+        challenges = {}
         tool = self._make_tool(strategies, challenges)
         # First call → challenge
         r1 = json.loads(tool._run(0, "blur", {}, "test"))
