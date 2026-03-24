@@ -1,5 +1,6 @@
-import { STAGE_LABELS } from '../../lib/colors';
 import type { PipelineStage } from '../../types';
+
+import { STAGE_LABELS } from '../../lib/colors';
 import { StageIndicator } from './StageIndicator';
 
 interface PipelineProgressProps {

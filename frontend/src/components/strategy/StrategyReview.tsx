@@ -1,5 +1,6 @@
 import type { ProtectionStrategy, ObfuscationMethod } from '../../types/strategy';
 import type { RiskAssessment } from '../../types/risk';
+
 import { StrategyList } from './StrategyList';
 import { ApproveBar } from './ApproveBar';
 

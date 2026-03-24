@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+
 import { getHistory } from '../../api/history';
 import type { SessionSummary } from '../../api/history';
 import { SessionCard } from './SessionCard';

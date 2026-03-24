@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
+
 import { useConversationStore } from '../../stores/conversationStore';
-import { sendChat } from '../../api/coordinator';
 import { usePipelineStore } from '../../stores/pipelineStore';
+import { sendChat } from '../../api/coordinator';
 import { MessageBubble } from './MessageBubble';
 import { ChatInput } from './ChatInput';
 import { SuggestionChips } from './SuggestionChips';

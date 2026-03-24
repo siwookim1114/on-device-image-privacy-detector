@@ -1,4 +1,5 @@
 import { useRef, useEffect } from 'react';
+
 import type { BoundingBox } from '../../types/detection';
 
 interface ElementZoomProps {

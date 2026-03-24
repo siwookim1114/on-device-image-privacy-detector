@@ -1,4 +1,5 @@
 import { useRef, useState, useCallback } from 'react';
+
 import type { ConsentStatus } from '../../types/consent';
 import { useConsentStore } from '../../stores/consentStore';
 import { ConsentLevelSelect } from './ConsentLevelSelect';

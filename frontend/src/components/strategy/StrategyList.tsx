@@ -1,4 +1,5 @@
 import { useState } from 'react';
+
 import type { ProtectionStrategy, ObfuscationMethod } from '../../types/strategy';
 import { StrategyCard } from './StrategyCard';
 

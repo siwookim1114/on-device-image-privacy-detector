@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 import traceback
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, status
@@ -67,6 +69,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.coordinator_agent = None
     app.state.profile_service = None
     app.state.consent_service = None
+    app.state.provenance_service = None
 
     try:
         from backend.services.pipeline_service import PipelineService  # type: ignore[import]
@@ -89,6 +92,68 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except ImportError:
         pass
 
+    # -- ProvenanceService ---------------------------------------------------------
+    # NOTE: PipelineService is constructed above this block (before the MongoDB
+    # client is available).  We set its _provenance attribute here, after the
+    # ProvenanceService is ready, so no constructor-order changes are needed.
+    try:
+        import threading as _threading
+
+        from backend.services.provenance_service import ProvenanceService  # type: ignore[import]
+
+        # Resolve the MongoDB collection if available (db may not be connected yet;
+        # we re-use the _mongo_db reference set below in the ProfileService block,
+        # but that block runs after this one — so we attempt a lightweight connect
+        # here and fall back gracefully if MongoDB is unavailable).
+        _prov_collection = None
+        try:
+            import pymongo as _pymongo
+
+            _prov_client = _pymongo.MongoClient(
+                settings.mongo_url, serverSelectionTimeoutMS=3000
+            )
+            _prov_db = _prov_client[settings.mongo_db]
+            _prov_collection = _prov_db["provenance_logs"]
+        except Exception as _prov_mongo_exc:
+            logging.getLogger(__name__).debug(
+                "Provenance MongoDB unavailable, using file-only mode: %s",
+                _prov_mongo_exc,
+            )
+
+        _prov_logs_dir = str(Path(settings.results_dir).parent / "provenance_logs")
+        provenance_service = ProvenanceService(
+            mongo_collection=_prov_collection,
+            provenance_logs_dir=_prov_logs_dir,
+        )
+        app.state.provenance_service = provenance_service
+
+        # Inject into the PipelineService so it can call open_session / record
+        if app.state.pipeline_service is not None:
+            app.state.pipeline_service._provenance = provenance_service
+
+        # Wire the safety kernel's on_record callback so every OverrideRecord
+        # is forwarded to the provenance log.  We use a thread-local to carry
+        # the active session_id across thread boundaries without locking.
+        if app.state.safety_kernel is not None:
+            app.state._prov_session_local = _threading.local()
+
+            def _on_safety_record(override_rec):  # type: ignore[no-untyped-def]
+                sid = getattr(app.state._prov_session_local, "session_id", None)
+                if sid is not None:
+                    try:
+                        provenance_service.record_override(sid, override_rec)
+                    except Exception as _cb_exc:
+                        logging.getLogger(__name__).warning(
+                            "Provenance on_safety_record failed: %s", _cb_exc
+                        )
+
+            app.state.safety_kernel._on_record = _on_safety_record
+
+    except Exception as _prov_svc_exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "ProvenanceService not started: %s", _prov_svc_exc
+        )
+
     # -- ProfileService --------------------------------------------------------
     try:
         import pymongo  # type: ignore[import]
@@ -101,8 +166,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.profile_service = ProfileService(db=_mongo_db)
     except Exception as _profile_svc_exc:  # noqa: BLE001
         # Non-fatal: profile endpoints degrade to 503 until MongoDB is reachable
-        import logging as _logging
-        _logging.getLogger(__name__).warning(
+        logging.getLogger(__name__).warning(
             "ProfileService not started: %s", _profile_svc_exc
         )
 
@@ -118,8 +182,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.consent_service = _consent_svc
     except Exception as _consent_svc_exc:  # noqa: BLE001
         # Non-fatal: consent endpoints degrade to 503 until MongoDB is reachable
-        import logging as _logging
-        _logging.getLogger(__name__).warning(
+        logging.getLogger(__name__).warning(
             "ConsentService not started: %s", _consent_svc_exc
         )
 

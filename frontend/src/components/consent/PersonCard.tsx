@@ -1,4 +1,5 @@
 import { useState } from 'react';
+
 import type { PersonEntry } from '../../types/consent';
 import { ConsentHistory } from './ConsentHistory';
 

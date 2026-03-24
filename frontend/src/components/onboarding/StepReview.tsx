@@ -1,8 +1,9 @@
 import { useState } from 'react';
+
+import type { AutoAdvanceLevel } from '../../types/profile';
 import { useOnboardingStore } from '../../stores/onboardingStore';
 import { SegmentedControl } from './SegmentedControl';
 import type { SegmentOption } from './SegmentedControl';
-import type { AutoAdvanceLevel } from '../../types/profile';
 
 const METHOD_OPTIONS: Record<'face' | 'text' | 'screen' | 'object', string[]> = {
   face: ['blur', 'pixelate', 'solid_overlay'],

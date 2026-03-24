@@ -1,4 +1,5 @@
 import type { RiskAssessment } from '../../types/risk';
+
 import { SEVERITY_COLORS } from '../../lib/colors';
 import { SeverityBadge } from './SeverityBadge';
 

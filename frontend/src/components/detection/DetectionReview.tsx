@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+
 import type { RiskAssessment, RiskLevel } from '../../types/risk';
 import { usePipelineStore } from '../../stores/pipelineStore';
 import { SEVERITY_COLORS } from '../../lib/colors';

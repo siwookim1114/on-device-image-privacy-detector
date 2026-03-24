@@ -124,19 +124,21 @@ class PipelineService:
         upload_dir: Optional[str] = None,
         results_dir: Optional[str] = None,
         max_concurrent: int = 2,
+        provenance_service: Optional[Any] = None,
     ) -> None:
         """
         Args:
-            ws_manager:      WebSocketManager singleton (set by main.py after creation,
-                             or injected directly when constructing for tests).
-            session_manager: SessionManager singleton (optional; used for audit appends).
-            config_path:     Ignored — kept for compatibility with main.py kwarg.
-            upload_dir:      Ignored — kept for compatibility with main.py kwarg.
-            results_dir:     Ignored — the orchestrator manages its own output_dir.
-            max_concurrent:  ThreadPoolExecutor worker count (default 2).
+            ws_manager:          WebSocketManager singleton.
+            session_manager:     SessionManager singleton (optional).
+            config_path:         Ignored — kept for compatibility.
+            upload_dir:          Ignored — kept for compatibility.
+            results_dir:         Ignored — the orchestrator manages its own output_dir.
+            max_concurrent:      ThreadPoolExecutor worker count (default 2).
+            provenance_service:  Optional ProvenanceService instance for event logging.
         """
         self.ws_manager: WebSocketManager = ws_manager or WebSocketManager()
         self.session_manager = session_manager
+        self._provenance: Optional[Any] = provenance_service
         self._orchestrator: Any = None          # PipelineOrchestrator
         self._orchestrator_ready: bool = False
         self._executor = ThreadPoolExecutor(
@@ -329,6 +331,26 @@ class PipelineService:
         )
 
     # -----------------------------------------------------------------------
+    # Provenance helper (fire-and-forget; never raises)
+    # -----------------------------------------------------------------------
+
+    def _prov(
+        self,
+        session_id: str,
+        event_type: Any,
+        phase: str,
+        data: Dict[str, Any],
+        detection_id: Optional[str] = None,
+    ) -> None:
+        """Emit one provenance event, silently ignoring all errors."""
+        if self._provenance is None:
+            return
+        try:
+            self._provenance.record(session_id, event_type, phase, data, detection_id)
+        except Exception as exc:
+            logger.debug("Provenance record skipped: %s", exc)
+
+    # -----------------------------------------------------------------------
     # Synchronous execution (runs in worker thread)
     # -----------------------------------------------------------------------
 
@@ -352,6 +374,26 @@ class PipelineService:
         """
         session.status = "running"
         pipeline_start = time.perf_counter()
+
+        # Lazy import so the module is importable without utils on sys.path
+        try:
+            from utils.models import ProvenanceEventType as _PET
+        except ImportError:
+            _PET = None  # type: ignore[assignment]
+
+        # Open a provenance session (fire-and-forget; no-op if service absent)
+        if self._provenance is not None and _PET is not None:
+            try:
+                cfg_snap = session.config or {}
+                self._provenance.open_session(
+                    session_id=session.session_id,
+                    image_path=session.image_path or "",
+                    run_mode=cfg_snap.get("mode", "auto"),
+                    fallback_only=cfg_snap.get("fallback_only", False),
+                    user_id=getattr(session, "user_id", None),
+                )
+            except Exception as _pe:
+                logger.debug("Provenance open_session skipped: %s", _pe)
 
         def emit(event_type: str, payload: dict) -> None:
             self.ws_manager.broadcast_from_thread(
@@ -394,9 +436,8 @@ class PipelineService:
                     if profile_service is None and hasattr(orc, "profile_service"):
                         profile_service = orc.profile_service
                     if profile_service is not None:
-                        import asyncio as _asyncio
                         try:
-                            user_profile = _asyncio.run_coroutine_threadsafe(
+                            user_profile = asyncio.run_coroutine_threadsafe(
                                 profile_service.get_profile(session.session_id),
                                 loop,
                             ).result(timeout=5)
@@ -431,6 +472,8 @@ class PipelineService:
                     "display_name": meta["display_name"],
                     "description": meta["description"],
                 })
+                if _PET is not None:
+                    self._prov(session.session_id, _PET.STAGE_START, stage, {"stage": stage})
                 t0 = time.perf_counter()
                 session.current_stage = stage
                 try:
@@ -448,7 +491,33 @@ class PipelineService:
                         },
                         "elapsed_ms": elapsed,
                     })
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_COMPLETE, stage, {
+                            "faces": len(detections.faces),
+                            "text_regions": len(detections.text_regions),
+                            "objects": len(detections.objects),
+                            "elapsed_ms": elapsed,
+                        })
+                        for face in detections.faces:
+                            self._prov(session.session_id, _PET.FACE_DETECTED, stage, {
+                                "confidence": face.confidence,
+                                "size": getattr(face, "size", None),
+                                "clarity": getattr(face, "clarity", None),
+                            }, detection_id=face.id)
+                        for text in detections.text_regions:
+                            self._prov(session.session_id, _PET.TEXT_DETECTED, stage, {
+                                "text_type": getattr(text, "text_type", None),
+                                "confidence": text.confidence,
+                            }, detection_id=text.id)
+                        for obj in detections.objects:
+                            self._prov(session.session_id, _PET.OBJECT_DETECTED, stage, {
+                                "object_class": getattr(obj, "object_class", None),
+                                "contains_screen": getattr(obj, "contains_screen", False),
+                                "confidence": obj.confidence,
+                            }, detection_id=obj.id)
                 except Exception as exc:
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_ERROR, stage, {"error": str(exc)})
                     self._handle_stage_error(session, stage, exc, emit)
                     return
             else:
@@ -473,6 +542,11 @@ class PipelineService:
                     "display_name": meta["display_name"],
                     "description": meta["description"],
                 })
+                if _PET is not None:
+                    self._prov(session.session_id, _PET.STAGE_START, stage, {
+                        "stage": stage,
+                        "fallback_only": fallback_only,
+                    })
                 t0 = time.perf_counter()
                 session.current_stage = stage
                 try:
@@ -509,7 +583,28 @@ class PipelineService:
                         },
                         "elapsed_ms": elapsed,
                     })
+                    if _PET is not None:
+                        phase_type = _PET.RISK_ASSESSED_P1 if fallback_only else _PET.RISK_ASSESSED_P2
+                        self._prov(session.session_id, _PET.STAGE_COMPLETE, stage, {
+                            "assessments": len(risk_result.risk_assessments),
+                            "overall_risk": risk_result.overall_risk_level.value,
+                            "elapsed_ms": elapsed,
+                        })
+                        for assessment in risk_result.risk_assessments:
+                            screen_state = getattr(assessment, "screen_state", None)
+                            self._prov(session.session_id, phase_type, stage, {
+                                "element_type": assessment.element_type,
+                                "severity": assessment.severity.value,
+                                "requires_protection": assessment.requires_protection,
+                                "screen_state": screen_state,
+                            }, detection_id=assessment.detection_id)
+                            if screen_state in ("verified_on", "verified_off"):
+                                self._prov(session.session_id, _PET.SCREEN_STATE_VERIFIED, stage, {
+                                    "screen_state": screen_state,
+                                }, detection_id=assessment.detection_id)
                 except Exception as exc:
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_ERROR, stage, {"error": str(exc)})
                     self._handle_stage_error(session, stage, exc, emit)
                     return
 
@@ -532,6 +627,8 @@ class PipelineService:
                     "display_name": meta["display_name"],
                     "description": meta["description"],
                 })
+                if _PET is not None:
+                    self._prov(session.session_id, _PET.STAGE_START, stage, {"stage": stage})
                 t0 = time.perf_counter()
                 session.current_stage = stage
                 try:
@@ -545,6 +642,31 @@ class PipelineService:
                         "summary": {"status": "complete"},
                         "elapsed_ms": elapsed,
                     })
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_COMPLETE, stage, {
+                            "status": "complete",
+                            "elapsed_ms": elapsed,
+                        })
+                        for assessment in risk_result.risk_assessments:
+                            if assessment.element_type != "face":
+                                continue
+                            consent = getattr(assessment, "consent_status", None)
+                            person_id = getattr(assessment, "person_id", None)
+                            if person_id:
+                                self._prov(session.session_id, _PET.FACE_MATCH_HIT, stage, {
+                                    "person_label": getattr(assessment, "person_label", None),
+                                    "consent_status": consent.value if hasattr(consent, "value") else str(consent),
+                                    "consent_confidence": getattr(assessment, "consent_confidence", 0.0),
+                                }, detection_id=assessment.detection_id)
+                            else:
+                                self._prov(session.session_id, _PET.FACE_MATCH_MISS, stage, {
+                                    "consent_status": consent.value if hasattr(consent, "value") else str(consent) if consent else None,
+                                }, detection_id=assessment.detection_id)
+                            if consent is not None:
+                                self._prov(session.session_id, _PET.CONSENT_APPLIED, stage, {
+                                    "consent_status": consent.value if hasattr(consent, "value") else str(consent),
+                                    "person_id": person_id,
+                                }, detection_id=assessment.detection_id)
                 except Exception as exc:
                     # Non-fatal — log and continue
                     logger.warning(
@@ -557,6 +679,11 @@ class PipelineService:
                         "summary": {"status": "skipped", "reason": str(exc)},
                         "elapsed_ms": elapsed,
                     })
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_ERROR, stage, {
+                            "status": "skipped",
+                            "reason": str(exc),
+                        })
 
             # ----------------------------------------------------------------
             # Stage: strategy
@@ -569,6 +696,11 @@ class PipelineService:
                     "display_name": meta["display_name"],
                     "description": meta["description"],
                 })
+                if _PET is not None:
+                    self._prov(session.session_id, _PET.STAGE_START, stage, {
+                        "stage": stage,
+                        "fallback_only": fallback_only,
+                    })
                 t0 = time.perf_counter()
                 session.current_stage = stage
                 try:
@@ -589,7 +721,24 @@ class PipelineService:
                         },
                         "elapsed_ms": elapsed,
                     })
+                    if _PET is not None:
+                        phase_type = _PET.STRATEGY_ASSIGNED_P1 if fallback_only else _PET.STRATEGY_ASSIGNED_P2
+                        self._prov(session.session_id, _PET.STAGE_COMPLETE, stage, {
+                            "strategies": len(strategy_result.strategies),
+                            "protections_recommended": strategy_result.total_protections_recommended,
+                            "elapsed_ms": elapsed,
+                        })
+                        for strat in strategy_result.strategies:
+                            method = strat.recommended_method
+                            self._prov(session.session_id, phase_type, stage, {
+                                "element": strat.element,
+                                "severity": strat.severity.value if hasattr(strat.severity, "value") else str(strat.severity),
+                                "method": method.value if hasattr(method, "value") else str(method) if method else "none",
+                                "requires_user_decision": strat.requires_user_decision,
+                            }, detection_id=strat.detection_id)
                 except Exception as exc:
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_ERROR, stage, {"error": str(exc)})
                     self._handle_stage_error(session, stage, exc, emit)
                     return
 
@@ -612,6 +761,8 @@ class PipelineService:
                     "display_name": meta["display_name"],
                     "description": meta["description"],
                 })
+                if _PET is not None:
+                    self._prov(session.session_id, _PET.STAGE_START, stage, {"stage": stage})
                 t0 = time.perf_counter()
                 session.current_stage = stage
                 seg_results: Dict[str, Any] = {}
@@ -644,6 +795,27 @@ class PipelineService:
                         },
                         "elapsed_ms": elapsed,
                     })
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_COMPLETE, stage, {
+                            "masks_generated": len(seg_results),
+                            "skipped": not run_sam,
+                            "elapsed_ms": elapsed,
+                        })
+                        if run_sam:
+                            for strat in strategy_result.strategies:
+                                if strat.detection_id in seg_results:
+                                    self._prov(session.session_id, _PET.SAM_MASK_GENERATED, stage, {
+                                        "mask_path": seg_results[strat.detection_id].get("mask_path"),
+                                    }, detection_id=strat.detection_id)
+                                else:
+                                    self._prov(session.session_id, _PET.SAM_SKIPPED, stage, {
+                                        "reason": "not in seg_results",
+                                    }, detection_id=strat.detection_id)
+                        else:
+                            for strat in strategy_result.strategies:
+                                self._prov(session.session_id, _PET.SAM_SKIPPED, stage, {
+                                    "reason": "fallback_only or no segmenter",
+                                }, detection_id=strat.detection_id)
                 except Exception as exc:
                     # SAM is non-fatal
                     logger.warning("SAM stage error (non-fatal): %s", exc)
@@ -658,6 +830,11 @@ class PipelineService:
                         },
                         "elapsed_ms": elapsed,
                     })
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_ERROR, stage, {
+                            "skipped": True,
+                            "reason": str(exc),
+                        })
 
             # ----------------------------------------------------------------
             # Stage: execution
@@ -670,6 +847,8 @@ class PipelineService:
                     "display_name": meta["display_name"],
                     "description": meta["description"],
                 })
+                if _PET is not None:
+                    self._prov(session.session_id, _PET.STAGE_START, stage, {"stage": stage})
                 t0 = time.perf_counter()
                 session.current_stage = stage
                 try:
@@ -695,7 +874,31 @@ class PipelineService:
                         },
                         "elapsed_ms": elapsed,
                     })
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_COMPLETE, stage, {
+                            "transformations_applied": len(execution_report.transformations_applied),
+                            "status": execution_report.status,
+                            "elapsed_ms": elapsed,
+                        })
+                        for xform in execution_report.transformations_applied:
+                            xstatus = getattr(xform, "status", "unknown")
+                            method = xform.method
+                            method_str = method.value if hasattr(method, "value") else str(method)
+                            if xstatus == "success":
+                                self._prov(session.session_id, _PET.OBFUSCATION_APPLIED, stage, {
+                                    "element": xform.element,
+                                    "method": method_str,
+                                    "execution_time_ms": getattr(xform, "execution_time_ms", None),
+                                }, detection_id=xform.detection_id)
+                            else:
+                                self._prov(session.session_id, _PET.OBFUSCATION_FAILED, stage, {
+                                    "element": xform.element,
+                                    "method": method_str,
+                                    "error_message": getattr(xform, "error_message", None),
+                                }, detection_id=xform.detection_id)
                 except Exception as exc:
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_ERROR, stage, {"error": str(exc)})
                     self._handle_stage_error(session, stage, exc, emit)
                     return
 
@@ -718,6 +921,8 @@ class PipelineService:
                     "display_name": meta["display_name"],
                     "description": meta["description"],
                 })
+                if _PET is not None:
+                    self._prov(session.session_id, _PET.STAGE_START, stage, {"stage": stage})
                 t0 = time.perf_counter()
                 session.current_stage = stage
                 try:
@@ -757,6 +962,11 @@ class PipelineService:
                         "summary": {"files_written": 3},
                         "elapsed_ms": elapsed,
                     })
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_COMPLETE, stage, {
+                            "files_written": 3,
+                            "elapsed_ms": elapsed,
+                        })
                 except Exception as exc:
                     # Export failure is non-fatal
                     logger.warning("Export stage error (non-fatal): %s", exc)
@@ -770,6 +980,11 @@ class PipelineService:
                         },
                         "elapsed_ms": elapsed,
                     })
+                    if _PET is not None:
+                        self._prov(session.session_id, _PET.STAGE_ERROR, stage, {
+                            "files_written": 0,
+                            "reason": str(exc),
+                        })
 
             # ----------------------------------------------------------------
             # Pipeline complete
@@ -790,6 +1005,21 @@ class PipelineService:
                 "protections_applied": protections_applied,
                 "results_url": results_url,
             })
+
+            # Finalize the provenance session (writes JSON + MongoDB summary)
+            if self._provenance is not None:
+                try:
+                    _results_dir = str(getattr(orc, "output_dir", None) or "")
+                    self._provenance.finalize_session(
+                        session_id=session.session_id,
+                        phases_completed=run_stages,
+                        total_time_ms=total_ms,
+                        protections_applied=protections_applied,
+                        protected_image_path=session.protected_image_path,
+                        results_dir=_results_dir or None,
+                    )
+                except Exception as _fin_exc:
+                    logger.debug("Provenance finalize_session skipped: %s", _fin_exc)
             logger.info(
                 "Pipeline completed: session_id=%s  total_ms=%.0f",
                 session.session_id,
@@ -879,6 +1109,15 @@ class PipelineService:
         session.hitl_pending_approval = True
         session.hitl_event.clear()
 
+        # Record the HITL pause in provenance
+        try:
+            from utils.models import ProvenanceEventType as _PET2
+            self._prov(session.session_id, _PET2.HITL_PAUSED, "hitl", {
+                "checkpoint": checkpoint,
+            })
+        except Exception:
+            pass
+
         # Determine elements requiring review
         elements_requiring_review: List[str] = []
         if checkpoint == "risk_review" and session.risk_result:
@@ -932,6 +1171,15 @@ class PipelineService:
         session.status = "running"
         session.hitl_checkpoint = None
         session.hitl_pending_approval = False
+
+        try:
+            from utils.models import ProvenanceEventType as _PET3
+            self._prov(session.session_id, _PET3.HITL_APPROVED, "hitl", {
+                "checkpoint": checkpoint,
+                "resolved_by": "user_approval",
+            })
+        except Exception:
+            pass
 
         emit("pipeline_resumed", {
             "checkpoint": checkpoint,

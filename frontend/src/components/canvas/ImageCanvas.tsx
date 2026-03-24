@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Stage, Layer, Image as KonvaImage } from 'react-konva';
+
 import { useCanvasInteraction, type CanvasInteractionState } from '../../hooks/useCanvasInteraction';
 
 interface ImageCanvasProps {

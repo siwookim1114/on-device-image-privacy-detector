@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import type Konva from 'konva';
+
 import { fitScale } from '../lib/canvas-utils';
 
 const MIN_ZOOM = 0.1;

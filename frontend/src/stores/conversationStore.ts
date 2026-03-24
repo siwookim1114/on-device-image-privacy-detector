@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+
 import type { ParsedIntent } from '../types/coordinator';
 
 interface Message { role: 'user' | 'assistant' | 'system'; content: string; timestamp: number; }

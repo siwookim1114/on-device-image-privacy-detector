@@ -1,4 +1,5 @@
 import type { RiskAssessment } from '../../types/risk';
+
 import { BboxRect } from './BboxRect';
 
 interface BboxOverlayProps {

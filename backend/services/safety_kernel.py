@@ -104,11 +104,14 @@ class SafetyKernel:
     to persist records there; otherwise they are kept in an in-memory list.
     """
 
-    def __init__(self, db_collection=None) -> None:
+    def __init__(self, db_collection=None, on_record=None) -> None:
         # pymongo Collection | None
         self._collection = db_collection
         # In-memory fallback when no MongoDB collection is provided
         self._in_memory: List[Dict[str, Any]] = []
+        # Optional callback invoked after every OverrideRecord is persisted.
+        # Signature: on_record(rec: OverrideRecord) -> None
+        self._on_record = on_record
 
     # ------------------------------------------------------------------
     # Public API
@@ -635,6 +638,14 @@ class SafetyKernel:
         # Always write to in-memory list so get_audit_trail works even if
         # MongoDB is temporarily unavailable.
         self._in_memory.append(rec_dict)
+
+        # Notify the optional provenance callback (e.g. ProvenanceService).
+        # Errors in the callback must never surface to callers.
+        if self._on_record is not None:
+            try:
+                self._on_record(rec)
+            except Exception as exc:
+                logger.warning("on_record callback failed: %s", exc)
 
         if self._collection is not None:
             try:

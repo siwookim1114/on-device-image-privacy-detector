@@ -1,8 +1,9 @@
 import { useState } from 'react';
+
+import type { SessionSummary } from '../api/history';
 import { SessionList } from '../components/history/SessionList';
 import { DownloadButton } from '../components/history/DownloadButton';
 import { ProvenanceViewer } from '../components/history/ProvenanceViewer';
-import type { SessionSummary } from '../api/history';
 
 function SelectedSessionPanel({ session }: { session: SessionSummary }) {
   return (

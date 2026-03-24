@@ -1,4 +1,5 @@
 import apiClient from './client';
+
 import type { PersonEntry } from '../types/consent';
 
 export async function getPersons() {

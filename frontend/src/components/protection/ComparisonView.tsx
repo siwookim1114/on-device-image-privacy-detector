@@ -1,4 +1,5 @@
 import { useState } from 'react';
+
 import { BeforeAfterSlider } from './BeforeAfterSlider';
 
 type ComparisonMode = 'slider' | 'sidebyside' | 'toggle';

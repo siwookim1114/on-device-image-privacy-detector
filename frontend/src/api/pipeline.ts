@@ -1,4 +1,5 @@
 import apiClient from './client';
+
 import type { PipelineStatusResponse, ProcessingMode, EthicalMode } from '../types/pipeline';
 
 export async function startPipeline(image: File, mode: ProcessingMode = 'hybrid', ethicalMode: EthicalMode = 'balanced') {

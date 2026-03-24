@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import Annotated, Literal
+from typing import Annotated, Any, Dict, List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
@@ -198,3 +198,57 @@ async def export_audit(
         media_type="application/json",
         filename=f"{session_id}_audit_trail.json",
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /history/{session_id}/provenance
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/{session_id}/provenance",
+    summary="Return HITL-formatted provenance records for a session.",
+)
+async def get_provenance(
+    session_id: str,
+    request: Request,
+    session: Annotated[object, Depends(require_auth)],
+) -> Dict[str, Any]:
+    """
+    Return the HITL-relevant provenance records for *session_id*.
+
+    The response is shaped for the frontend ProvenanceViewer component:
+    each record has keys ``timestamp``, ``action``, ``detection_id``,
+    ``old_value``, ``new_value``, and ``reason``.
+
+    Returns 503 when the ProvenanceService has not been initialised.
+    Returns 404 when no provenance data exists for the given session_id.
+    """
+    prov_service = getattr(request.app.state, "provenance_service", None)
+    if prov_service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": {
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Provenance service is not available.",
+                    "details": {},
+                }
+            },
+        )
+
+    records: List[Dict[str, Any]] = prov_service.get_hitl_records(session_id)
+
+    # If no events exist at all for this session, surface a 404
+    if records == [] and prov_service.get_provenance(session_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": {
+                    "code": "PIPELINE_NOT_FOUND",
+                    "message": f"No provenance data found for session '{session_id}'.",
+                    "details": {"session_id": session_id},
+                }
+            },
+        )
+
+    return {"session_id": session_id, "records": records}

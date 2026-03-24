@@ -1,4 +1,5 @@
 import type { RiskLevel } from '../../types/risk';
+
 import { SEVERITY_COLORS } from '../../lib/colors';
 
 interface SeverityOverrideProps {

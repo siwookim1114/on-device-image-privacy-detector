@@ -1,6 +1,13 @@
 import { useEffect, useCallback, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 
+import type { RiskLevel } from '../types/risk';
+import type { ObfuscationMethod } from '../types/strategy';
+import type { TransformationResult } from '../types/execution';
+import { getPipelineResults, approvePipeline, getImageUrl } from '../api/pipeline';
+import { usePipelineStore } from '../stores/pipelineStore';
+import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
+import { fitScale } from '../lib/canvas-utils';
 import { WorkspaceLayout } from '../components/layout/WorkspaceLayout';
 import { Header } from '../components/layout/Header';
 import { PipelineProgress } from '../components/progress/PipelineProgress';
@@ -11,20 +18,6 @@ import { DetectionReview } from '../components/detection/DetectionReview';
 import { StrategyReview } from '../components/strategy/StrategyReview';
 import { ConversationPanel } from '../components/chat/ConversationPanel';
 import { ComparisonView } from '../components/protection/ComparisonView';
-
-import { usePipelineStore } from '../stores/pipelineStore';
-import { useCanvasInteraction } from '../hooks/useCanvasInteraction';
-import { fitScale } from '../lib/canvas-utils';
-
-import {
-  getPipelineResults,
-  approvePipeline,
-  getImageUrl,
-} from '../api/pipeline';
-
-import type { RiskLevel } from '../types/risk';
-import type { ObfuscationMethod } from '../types/strategy';
-import type { TransformationResult } from '../types/execution';
 
 function SkeletonBar({ w }: { w: string }) {
   return <div className={`h-3 rounded-full bg-gray-800 animate-pulse ${w}`} />;

@@ -1,4 +1,5 @@
 import type { RiskAssessment, RiskLevel } from '../../types/risk';
+
 import { ElementCard } from './ElementCard';
 
 interface ElementListProps {

@@ -1,9 +1,10 @@
 import { useRef, useState, useCallback } from 'react';
+
+import type { ContactEntry } from '../../types/profile';
+import type { ConsentStatus } from '../../types/consent';
 import { useOnboardingStore } from '../../stores/onboardingStore';
 import { useStudyLogger } from '../../hooks/useStudyLogger';
 import { ConsentLevelSelect } from '../consent/ConsentLevelSelect';
-import type { ContactEntry } from '../../types/profile';
-import type { ConsentStatus } from '../../types/consent';
 
 const MAX_PHOTOS = 5;
 const ACCEPTED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];

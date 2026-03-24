@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+
 import { useConsentStore } from '../../stores/consentStore';
 import { PersonCard } from './PersonCard';
 

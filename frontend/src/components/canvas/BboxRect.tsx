@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Group, Rect, Text } from 'react-konva';
+
 import type { BoundingBox } from '../../types/detection';
 import type { RiskLevel } from '../../types/risk';
 import { SEVERITY_COLORS } from '../../lib/colors';

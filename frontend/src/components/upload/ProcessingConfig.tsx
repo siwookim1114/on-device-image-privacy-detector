@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+
 import type { ProcessingMode, EthicalMode } from '../../types/pipeline';
 
 interface ProcessingConfigProps {

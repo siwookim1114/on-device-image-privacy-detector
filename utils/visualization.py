@@ -8,9 +8,9 @@ visual risk maps with color-coded bounding boxes by severity level.
 import json
 from pathlib import Path
 from typing import Dict, Optional
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 import numpy as np
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from utils.models import (
     ObfuscationMethod,

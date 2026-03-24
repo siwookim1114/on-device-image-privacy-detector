@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Tuple, Any
 from datetime import datetime
 from enum import Enum
+import time
 import uuid
 
 # Enumerations 
@@ -466,6 +467,53 @@ class ExecutionReport(BaseModel):
     protected_image_path: Optional[str] = None
 
 # Provenance Models
+
+class ProvenanceEventType(str, Enum):
+    PIPELINE_START = "pipeline_start"
+    PIPELINE_COMPLETE = "pipeline_complete"
+    PIPELINE_FAILED = "pipeline_failed"
+    STAGE_START = "stage_start"
+    STAGE_COMPLETE = "stage_complete"
+    STAGE_ERROR = "stage_error"
+    FACE_DETECTED = "face_detected"
+    TEXT_DETECTED = "text_detected"
+    OBJECT_DETECTED = "object_detected"
+    RISK_ASSESSED_P1 = "risk_assessed_phase1"
+    RISK_ASSESSED_P2 = "risk_assessed_phase2"
+    RISK_ESCALATED = "risk_escalated"
+    SCREEN_STATE_VERIFIED = "screen_state_verified"
+    FACE_MATCH_HIT = "face_match_hit"
+    FACE_MATCH_MISS = "face_match_miss"
+    CONSENT_APPLIED = "consent_applied"
+    STRATEGY_ASSIGNED_P1 = "strategy_assigned_phase1"
+    STRATEGY_ASSIGNED_P2 = "strategy_assigned_phase2"
+    CHALLENGE_TRIGGERED = "challenge_triggered"
+    CHALLENGE_RESOLVED = "challenge_resolved"
+    SAM_MASK_GENERATED = "sam_mask_generated"
+    SAM_SKIPPED = "sam_skipped"
+    OBFUSCATION_APPLIED = "obfuscation_applied"
+    OBFUSCATION_FAILED = "obfuscation_failed"
+    VLM_PATCH_APPLIED = "vlm_patch_applied"
+    VLM_COVERAGE_ADDED = "vlm_coverage_added"
+    SAFETY_ALLOW = "safety_allow"
+    SAFETY_BLOCK = "safety_block"
+    SAFETY_CHALLENGE = "safety_challenge"
+    HITL_PAUSED = "hitl_paused"
+    HITL_APPROVED = "hitl_approved"
+    HITL_OVERRIDE_APPLIED = "hitl_override_applied"
+    HITL_REJECTED = "hitl_rejected"
+
+
+class ProvenanceEvent(BaseModel):
+    event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    session_id: str
+    timestamp: float = Field(default_factory=time.time)
+    event_type: ProvenanceEventType
+    phase: str
+    detection_id: Optional[str] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+
 class EditRecord(BaseModel):
     """Record of a single edit"""
     edit_id: int

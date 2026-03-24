@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+
+import { createProfile } from '../api/profile';
+import { useOnboardingStore } from '../stores/onboardingStore';
+import { useStudyLogger } from '../hooks/useStudyLogger';
 import { ProgressDots } from '../components/onboarding/ProgressDots';
 import { StepIdentity } from '../components/onboarding/StepIdentity';
 import { StepContacts } from '../components/onboarding/StepContacts';
 import { StepSensitivity } from '../components/onboarding/StepSensitivity';
 import { StepReview } from '../components/onboarding/StepReview';
-import { useOnboardingStore } from '../stores/onboardingStore';
-import { useStudyLogger } from '../hooks/useStudyLogger';
-import { createProfile } from '../api/profile';
 
 const TOTAL_STEPS = 4;
 const STEP_NAMES = ['identity', 'contacts', 'sensitivity', 'review'];

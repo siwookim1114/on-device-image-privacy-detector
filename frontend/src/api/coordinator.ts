@@ -1,4 +1,5 @@
 import apiClient from './client';
+
 import type { ChatResponse } from '../types/coordinator';
 
 export async function sendChat(sessionId: string, message: string) {

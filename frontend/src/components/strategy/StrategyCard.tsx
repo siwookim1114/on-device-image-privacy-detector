@@ -1,4 +1,5 @@
 import type { ProtectionStrategy, ObfuscationMethod } from '../../types/strategy';
+
 import { SeverityBadge } from '../detection/SeverityBadge';
 import { MethodSelector } from './MethodSelector';
 import { ParamSliders } from './ParamSliders';

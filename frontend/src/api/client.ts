@@ -1,4 +1,5 @@
 import axios from 'axios';
+
 import type { ApiError } from '../types/api';
 
 const apiClient = axios.create({

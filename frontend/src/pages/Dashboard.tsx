@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+
+import type { ProcessingMode, EthicalMode } from '../types/pipeline';
+import { startPipeline } from '../api/pipeline';
+import { usePipelineStore } from '../stores/pipelineStore';
 import { DropZone } from '../components/upload/DropZone';
 import { ProcessingConfig } from '../components/upload/ProcessingConfig';
 import { ProfileQuickSelect } from '../components/upload/ProfileQuickSelect';
-import { startPipeline } from '../api/pipeline';
-import { usePipelineStore } from '../stores/pipelineStore';
-import type { ProcessingMode, EthicalMode } from '../types/pipeline';
 
 type ProfileKey = 'strict' | 'balanced' | 'creative';
 

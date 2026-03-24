@@ -1,8 +1,8 @@
+import type { OnboardingState } from '../../types/profile';
 import { useOnboardingStore } from '../../stores/onboardingStore';
 import { useStudyLogger } from '../../hooks/useStudyLogger';
 import { SegmentedControl } from './SegmentedControl';
 import type { SegmentOption } from './SegmentedControl';
-import type { OnboardingState } from '../../types/profile';
 
 const FACE_OPTIONS: SegmentOption[] = [
   {

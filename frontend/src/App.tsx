@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+
 import { AppSidebar } from './components/layout/AppSidebar';
 import { Dashboard } from './pages/Dashboard';
 import { Workspace } from './pages/Workspace';

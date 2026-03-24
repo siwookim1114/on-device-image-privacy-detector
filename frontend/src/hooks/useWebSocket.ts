@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+
 import type { WsEnvelope } from '../types/api';
-import { usePipelineStore } from '../stores/pipelineStore';
 import type { PipelineStage, HitlCheckpoint } from '../types/pipeline';
+import { usePipelineStore } from '../stores/pipelineStore';
 
 interface UseWebSocketResult {
   connected: boolean;
