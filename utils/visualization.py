@@ -102,6 +102,7 @@ def _serialize_assessment(a) -> dict:
         "classification": classification,
         "consent_status": consent_status,
         "consent_confidence": a.consent_confidence,
+        "text_polygon": a.text_polygon,
     }
 
 
@@ -407,11 +408,12 @@ def generate_protection_preview(
 
 def _apply_obfuscation_bbox(
     image: Image.Image, x: int, y: int, w: int, h: int,
-    method: ObfuscationMethod, params: dict,
+    method: ObfuscationMethod, params: dict, padding: int = 0,
 ):
-    """Apply obfuscation to a rectangular bbox region."""
-    x1, y1 = max(0, x), max(0, y)
-    x2, y2 = min(image.width, x + w), min(image.height, y + h)
+    """Apply obfuscation to a rectangular bbox region.
+    Optional padding expands the region (used for closing gaps between text fragments)."""
+    x1, y1 = max(0, x - padding), max(0, y - padding)
+    x2, y2 = min(image.width, x + w + padding), min(image.height, y + h + padding)
     if x2 <= x1 or y2 <= y1:
         return
 

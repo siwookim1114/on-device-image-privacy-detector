@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
@@ -117,9 +117,13 @@ class ExecutionAgent:
 
         # ---- Phase 1: Deterministic Execution ----
         print(f"\n  Phase 1: Deterministic execution...")
+        original_snapshot = image.copy()  # Snapshot before any overlays for label restore
         transformations, unchanged, stats = self._phase1_execute(
-            image, strategy_result, bbox_lookup
+            image, strategy_result, bbox_lookup, risk_result
         )
+
+        # ---- Phase 1.5: Z-order label restoration with value-aware exclusion ----
+        self._restore_labels(image, original_snapshot, strategy_result, bbox_lookup, risk_result)
         print(f"  Phase 1 complete: {stats['applied']} applied "
               f"({stats['sam']} SAM, {stats['bbox']} bbox), "
               f"{len(unchanged)} unchanged")
@@ -129,7 +133,7 @@ class ExecutionAgent:
         if self.vlm and stats["applied"] > 0:
             print(f"\n  Phase 2: VLM visual verification...")
             verification_patches = self._phase2_verify(
-                image, transformations, bbox_lookup
+                image, transformations, bbox_lookup, strategy_result
             )
             print(f"  Phase 2 complete: {verification_patches} patches applied")
         elif not self.vlm:
@@ -175,6 +179,7 @@ class ExecutionAgent:
         image: Image.Image,
         strategy_result: StrategyRecommendations,
         bbox_lookup: Dict[str, BoundingBox],
+        risk_result: Optional[RiskAnalysisResult] = None,
     ) -> tuple:
         """Apply all strategies deterministically. Returns (transformations, unchanged, stats)."""
         strategies = sorted(
@@ -199,7 +204,7 @@ class ExecutionAgent:
 
             t_start = time.time()
             try:
-                used_sam = self._apply_strategy(image, strategy, bbox_lookup)
+                used_sam = self._apply_strategy(image, strategy, bbox_lookup, risk_result)
                 t_ms = (time.time() - t_start) * 1000
 
                 if used_sam:
@@ -237,6 +242,7 @@ class ExecutionAgent:
         image: Image.Image,
         strategy: ProtectionStrategy,
         bbox_lookup: Dict[str, BoundingBox],
+        risk_result: Optional[RiskAnalysisResult] = None,
     ) -> bool:
         """Apply a single strategy. Returns True if SAM mask was used."""
         method = strategy.recommended_method
@@ -252,15 +258,152 @@ class ExecutionAgent:
             except Exception as e:
                 print(f"    SAM mask failed for {strategy.element}: {e}, falling back to bbox")
 
+        # Try polygon overlay for text solid_overlay (tighter than axis-aligned bbox)
+        if method == ObfuscationMethod.SOLID_OVERLAY and "text" in strategy.element.lower():
+            polygon = self._get_polygon(strategy.detection_id, risk_result)
+            if polygon and len(polygon) >= 3:
+                try:
+                    self._apply_polygon_overlay(image, polygon, params)
+                    print(f"    POLY {method.value:15} -> {strategy.element[:40]}")
+                    return False
+                except Exception as e:
+                    print(f"    POLY failed for {strategy.element}: {e}, falling back to bbox")
+
         # Bbox fallback
         bbox = bbox_lookup.get(strategy.detection_id)
         if bbox is None:
             raise ValueError(f"No bbox found for detection_id={strategy.detection_id}")
 
         x, y, w, h = bbox.x, bbox.y, bbox.width, bbox.height
-        _apply_obfuscation_bbox(image, x, y, w, h, method, params)
+        # Add 3px padding for text solid_overlay to close gaps between adjacent fragments.
+        # Skip padding for split parts — they share an edge with their sibling label,
+        # and padding would bleed into the label's bbox.
+        is_split = "_split_" in strategy.detection_id
+        pad = 0 if is_split else (
+            3 if (method == ObfuscationMethod.SOLID_OVERLAY
+                  and "text" in strategy.element.lower()) else 0
+        )
+        _apply_obfuscation_bbox(image, x, y, w, h, method, params, padding=pad)
         print(f"    BBOX {method.value:15} -> {strategy.element[:40]}")
         return False
+
+    # ==================== Polygon + Label Restoration Helpers ====================
+
+    def _get_polygon(
+        self, detection_id: str, risk_result: Optional[RiskAnalysisResult]
+    ) -> Optional[List[List[int]]]:
+        """Get the EasyOCR 4-point polygon for a text element, if available."""
+        if risk_result is None:
+            return None
+        # Never use polygon for split elements — parent polygon covers full line
+        if "_split_" in detection_id:
+            return None
+        for a in risk_result.risk_assessments:
+            if a.detection_id == detection_id and a.text_polygon:
+                return a.text_polygon
+        return None
+
+    def _apply_polygon_overlay(
+        self, image: Image.Image, polygon: List[List[int]], params: dict
+    ):
+        """Apply solid_overlay using a polygon (tighter than axis-aligned bbox)."""
+        color = params.get("color", "black")
+        if color == "black" or isinstance(color, str):
+            color = (0, 0, 0)
+        draw = ImageDraw.Draw(image)
+        pts = [(p[0], p[1]) for p in polygon]
+        draw.polygon(pts, fill=color)
+
+    def _restore_labels(
+        self,
+        image: Image.Image,
+        original: Image.Image,
+        strategy_result: StrategyRecommendations,
+        bbox_lookup: Dict[str, BoundingBox],
+        risk_result: RiskAnalysisResult,
+    ):
+        """Restore text label regions with value-aware exclusion.
+
+        After all overlays are drawn, paste label pixels from the original image
+        ONLY where they don't overlap any protected element's bbox. This ensures:
+        - Labels are visible (restored from original)
+        - Value text stays covered (excluded from restoration)
+        - No gap between label and value (overlays drawn at full bbox)
+        """
+        # Collect ALL protected element bboxes (padded) as exclusion rects
+        protected_rects = []  # list of (x1, y1, x2, y2)
+        for s in strategy_result.strategies:
+            if s.recommended_method == ObfuscationMethod.NONE:
+                continue
+            bbox = bbox_lookup.get(s.detection_id)
+            if bbox is None:
+                continue
+            # Include 3px padding for text solid_overlay (matches _apply_strategy padding).
+            # Skip padding for split parts — they don't get padded during execution.
+            is_split = "_split_" in s.detection_id
+            pad = 0 if is_split else (
+                3 if (s.recommended_method == ObfuscationMethod.SOLID_OVERLAY
+                      and "text" in s.element.lower()) else 0
+            )
+            protected_rects.append((
+                max(0, bbox.x - pad),
+                max(0, bbox.y - pad),
+                min(image.width, bbox.x + bbox.width + pad),
+                min(image.height, bbox.y + bbox.height + pad),
+            ))
+
+        if not protected_rects:
+            return
+
+        # Collect text labels to restore
+        label_items = []
+        for s in strategy_result.strategies:
+            if s.recommended_method != ObfuscationMethod.NONE:
+                continue
+            if "text" not in s.element.lower():
+                continue
+            bbox = bbox_lookup.get(s.detection_id)
+            if bbox:
+                label_items.append((s.detection_id, bbox))
+
+        if not label_items:
+            return
+
+        restored = 0
+        for det_id, bbox in label_items:
+            lx1 = max(0, bbox.x)
+            ly1 = max(0, bbox.y)
+            lx2 = min(image.width, bbox.x + bbox.width)
+            ly2 = min(image.height, bbox.y + bbox.height)
+            if lx2 <= lx1 or ly2 <= ly1:
+                continue
+
+            lw, lh = lx2 - lx1, ly2 - ly1
+
+            # Build safe mask excluding protected value bboxes
+            safe_mask = np.ones((lh, lw), dtype=bool)
+            for vx1, vy1, vx2, vy2 in protected_rects:
+                # Convert to label-local coordinates
+                local_x1 = max(0, vx1 - lx1)
+                local_y1 = max(0, vy1 - ly1)
+                local_x2 = min(lw, vx2 - lx1)
+                local_y2 = min(lh, vy2 - ly1)
+                if local_x2 > local_x1 and local_y2 > local_y1:
+                    safe_mask[local_y1:local_y2, local_x1:local_x2] = False
+
+            # Skip if entire label is inside protected regions
+            if not safe_mask.any():
+                continue
+
+            # Composite: restore only safe pixels from original
+            label_crop = np.array(original.crop((lx1, ly1, lx2, ly2)))
+            protected_region = np.array(image.crop((lx1, ly1, lx2, ly2)))
+            protected_region[safe_mask] = label_crop[safe_mask]
+            image.paste(Image.fromarray(protected_region), (lx1, ly1))
+            restored += 1
+
+        if restored > 0:
+            print(f"  Label restore: {restored} text labels restored (value-aware exclusion)")
 
     # ==================== Phase 2: VLM Visual Verification ====================
 
@@ -269,6 +412,7 @@ class ExecutionAgent:
         image: Image.Image,
         transformations: List[TransformationResult],
         bbox_lookup: Dict[str, BoundingBox],
+        strategy_result: Optional[StrategyRecommendations] = None,
     ) -> int:
         """
         VLM-based visual verification of the protected image.
@@ -302,12 +446,28 @@ class ExecutionAgent:
             ]
             patches_applied = []
 
+            # Build screen exclusion zones for AddProtectionTool guard
+            screen_exclusion_zones = []
+            if strategy_result:
+                for s in strategy_result.strategies:
+                    if s.recommended_method != ObfuscationMethod.NONE:
+                        continue
+                    element_desc = s.element.lower()
+                    is_screen = any(kw in element_desc for kw in
+                                    ["laptop", "tv", "monitor", "screen", "tablet", "phone", "computer"])
+                    if not is_screen:
+                        continue
+                    bbox = bbox_lookup.get(s.detection_id)
+                    if bbox:
+                        screen_exclusion_zones.append([bbox.x, bbox.y, bbox.width, bbox.height])
+
             # Build agent
             agent, max_iters = self._build_verification_agent(
-                image, transformation_dicts, bbox_lookup, patches_applied
+                image, transformation_dicts, bbox_lookup, patches_applied,
+                screen_exclusion_zones=screen_exclusion_zones,
             )
 
-            # Build status summary
+            # Build status summary (protected elements)
             status_lines = []
             for t in transformation_dicts:
                 status_lines.append(
@@ -315,6 +475,35 @@ class ExecutionAgent:
                     f"method={t['method']} | bbox={t['bbox']}"
                 )
             status_text = "\n".join(status_lines)
+
+            # Build screen exclusion info from strategy_result
+            # Include ALL screen/object elements with method=none and screen_state
+            screen_exclusion_lines = []
+            if strategy_result:
+                for s in strategy_result.strategies:
+                    if s.recommended_method != ObfuscationMethod.NONE:
+                        continue
+                    # Find the original assessment's screen_state
+                    # Strategy element descriptions contain the element type info
+                    det_id = s.detection_id
+                    element_desc = s.element
+                    # Check if this is a screen device by looking for screen keywords
+                    is_screen = any(kw in element_desc.lower() for kw in
+                                    ["laptop", "tv", "monitor", "screen", "tablet", "phone", "computer"])
+                    if not is_screen:
+                        continue
+                    bbox = bbox_lookup.get(det_id)
+                    bbox_str = bbox.to_list() if bbox else "[unknown]"
+                    screen_exclusion_lines.append(
+                        f"  {det_id[:12]} | {element_desc[:35]} | "
+                        f"method=none (VERIFIED OFF — do NOT protect) | bbox={bbox_str}"
+                    )
+
+            if screen_exclusion_lines:
+                status_text += (
+                    "\n\nSCREEN DEVICES VERIFIED AS OFF (no protection needed):\n"
+                    + "\n".join(screen_exclusion_lines)
+                )
 
             input_message = HumanMessage(content=[
                 {"type": "text", "text": (
@@ -360,6 +549,7 @@ class ExecutionAgent:
         transformation_dicts: List[Dict],
         bbox_lookup: Dict[str, BoundingBox],
         patches_applied: List[Dict],
+        screen_exclusion_zones: Optional[List[List[int]]] = None,
     ):
         """Build Phase 2 VLM agent with verification tools."""
         tools = [
@@ -372,6 +562,7 @@ class ExecutionAgent:
             AddProtectionTool(
                 image=image,
                 patches_applied=patches_applied,
+                screen_exclusion_zones=screen_exclusion_zones or [],
             ),
             GetProtectionStatusTool(
                 transformations=transformation_dicts,
@@ -397,7 +588,10 @@ class ExecutionAgent:
             "through the obfuscation? If you can make out specific characters or words, "
             "the protection is insufficient.\n"
             "3. SCREENS — Can you see readable content on any screen device? If text or "
-            "interface elements are still distinguishable, protection is inadequate.\n\n"
+            "interface elements are still distinguishable, protection is inadequate.\n"
+            "   HOWEVER: Screen devices listed as 'VERIFIED OFF' in the status below have already been "
+            "analyzed by a dedicated screen verification agent and confirmed as OFF, CLOSED, or showing "
+            "their back/lid. Do NOT add protection to these screens. They are intentionally unprotected.\n\n"
             "IMPORTANT CONSTRAINTS:\n"
             "- Areas that appear blurred/pixelated/black ARE the protections working correctly. "
             "Only flag them if protection is INSUFFICIENT (you can still read text, identify a face).\n"

@@ -419,6 +419,7 @@ class TextRiskAssessmentTool(BaseTool):
                 "color_code": get_risk_color(self.config, risk_level.value),
                 "user_sensitivity_applied": user_sensitivity,
                 "bbox": bbox.to_list(),
+                "text_polygon": data.get("polygon"),
                 "requires_protection": requires_protection,
                 "factors": {
                     "text_type": text_type,
@@ -1032,11 +1033,12 @@ class ReclassifyAssessmentTool(BaseTool):
                         "message": f"Cannot downgrade face [{index}] with consent=none. Bystander faces are always CRITICAL."
                     })
 
-        # Guard: never downgrade CRITICAL/HIGH text items
+        # Guard: never downgrade CRITICAL/HIGH text items, or MEDIUM numeric fragments
         if assessment.get("element_type") == "text":
             old_rank = severity_rank.get(old_severity, 0)
             new_rank = severity_rank.get(new_severity_lower, 0)
-            if new_rank < old_rank and old_rank >= 2:
+            is_numeric = "numeric" in assessment.get("factors", {}).get("text_type", "")
+            if new_rank < old_rank and (old_rank >= 2 or (old_rank == 1 and is_numeric)):
                 return json.dumps({
                     "status": "blocked",
                     "index": index,
@@ -1159,12 +1161,13 @@ class BatchReclassifyTool(BaseTool):
                         )
                         continue
 
-            # Guard: never downgrade CRITICAL/HIGH text items
+            # Guard: never downgrade CRITICAL/HIGH text items, or MEDIUM numeric fragments
             severity_rank = {"low": 0, "medium": 1, "high": 2, "critical": 3}
             if assessment.get("element_type") == "text":
                 old_rank = severity_rank.get(old_severity, 0)
                 new_rank = severity_rank.get(new_severity, 0)
-                if new_rank < old_rank and old_rank >= 2:
+                is_numeric = "numeric" in assessment.get("factors", {}).get("text_type", "")
+                if new_rank < old_rank and (old_rank >= 2 or (old_rank == 1 and is_numeric)):
                     results.append(
                         f"[{index}] BLOCKED: cannot downgrade text from {old_severity}. "
                         f"Phase 1 PII match is authoritative."
@@ -1469,6 +1472,8 @@ class SplitAssessmentTool(BaseTool):
         for j, part in enumerate(processed_parts):
             new_assessment = dict(original)
             new_assessment["detection_id"] = f"{original_id}_split_{j}"
+            # Clear parent's polygon — it covers the full composite text, not the split part
+            new_assessment["text_polygon"] = None
 
             desc = part.get("element_description", original.get("element_description", "Unknown"))
             new_sev = part.get("severity", original.get("severity", "low")).lower()

@@ -542,6 +542,7 @@ class RiskAssessmentAgent:
                 "reasoning": "Phase 1 auto-split: label only",
                 "user_sensitivity_applied": a.get("user_sensitivity_applied", "high"),
                 "bbox": label_bbox,
+                "text_polygon": None,  # Parent polygon covers full line; use sub-bbox
                 "requires_protection": False,
             }
 
@@ -555,6 +556,7 @@ class RiskAssessmentAgent:
                 "reasoning": f"Phase 1 auto-split: {label_part.lower()} data",
                 "user_sensitivity_applied": "critical" if is_critical else a.get("user_sensitivity_applied", "high"),
                 "bbox": value_bbox,
+                "text_polygon": None,  # Parent polygon covers full line; use sub-bbox
                 "requires_protection": value_risk in (RiskLevel.CRITICAL, RiskLevel.HIGH),
             }
 
@@ -812,7 +814,8 @@ class RiskAssessmentAgent:
                     person_label=d.get("person_label"),
                     classification=d.get("classification"),
                     consent_status=d.get("consent_status"),
-                    consent_confidence=d.get("consent_confidence", 0.0)
+                    consent_confidence=d.get("consent_confidence", 0.0),
+                    text_polygon=d.get("text_polygon"),
                 )
                 final_assessments.append(risk_assessment)
             except Exception as e:

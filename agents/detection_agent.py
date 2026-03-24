@@ -65,10 +65,8 @@ class DetectionAgent:
             print(f"=" * 60)
             print(f"Processing: {Path(image_path).name}")
             print(f"=" * 60 + "\n")
-
             # Load image
             image = Image.open(image_path).convert("RGB")
-
             # Resize if needed
             max_size = self.config.pipeline.max_image_size
             if max(image.size) > max_size:
@@ -76,29 +74,23 @@ class DetectionAgent:
                 new_size = tuple(int(dim * ratio) for dim in image.size)
                 image = image.resize(new_size, Image.LANCZOS)
                 print(f"Resized to {new_size}\n")
-
             # Initialize results container
             detections = DetectionResults(image_path=image_path)
 
             # Stage 1: Run ALL detection tools
             print("\nRunning Detection Tools:")
             print("-" * 40)
-
-            # Run all detections
             self._run_face_detection(image_path, detections)
             self._run_text_detection(image_path, detections)
             self._run_object_detection(image_path, detections)
-
             # Stage 2: Create annotated image in memory (for downstream agents)
             if create_annotated:
                 self._annotated_image = self._create_annotated_image(image_path, detections)
                 print(f"  Annotated image created (in memory)")
 
-            # Processing time
             processing_time = (time.time() - start_time) * 1000
             detections.processing_time_ms = processing_time
 
-            # Print Summary
             print(f"\n{'='*60}")
             print(f"Detection Complete")
             print(f"{'='*60}")
@@ -175,6 +167,7 @@ class DetectionAgent:
                         confidence=text_data.get("confidence", 0.0),
                         text_content=text_data.get("text_content", ""),  # Matches tool output
                         text_type=text_data.get("text_type", "general_text"),
+                        polygon=text_data.get("polygon"),
                         attributes = {
                             "is_sensitive": text_data.get("is_sensitive", False),
                             "is_pii": text_data.get("is_pii", False),
@@ -242,7 +235,6 @@ class DetectionAgent:
             y1 = max(bbox.y, obj.bbox.y)
             x2 = min(bbox.x + bbox.width, obj.bbox.x + obj.bbox.width)
             y2 = min(bbox.y + bbox.height, obj.bbox.y + obj.bbox.height)
-
             # No overlap
             if x2 <= x1 or y2 <= y1:
                 continue

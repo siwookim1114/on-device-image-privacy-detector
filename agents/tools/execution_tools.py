@@ -112,6 +112,7 @@ class AddProtectionTool(BaseTool):
     handle_tool_error: bool = True
     image: Any = None
     patches_applied: Any = None
+    screen_exclusion_zones: Any = None  # list of [x, y, w, h] for verified-off screens
 
     def _run(
         self,
@@ -127,9 +128,42 @@ class AddProtectionTool(BaseTool):
         if method_lower not in {"blur", "pixelate", "solid_overlay"}:
             return json.dumps({"status": "error", "message": f"Invalid method '{method}'. Use: blur, pixelate, solid_overlay"})
 
+        # Guard: reject patches that overlap significantly with verified-off screen zones
+        if self.screen_exclusion_zones:
+            for zone in self.screen_exclusion_zones:
+                zx, zy, zw, zh = zone
+                # Compute intersection
+                ix1 = max(x, zx)
+                iy1 = max(y, zy)
+                ix2 = min(x + width, zx + zw)
+                iy2 = min(y + height, zy + zh)
+                if ix2 > ix1 and iy2 > iy1:
+                    overlap_area = (ix2 - ix1) * (iy2 - iy1)
+                    patch_area = width * height
+                    # Block if >50% of the patch overlaps a verified-off screen
+                    # OR if >40% of the screen zone is covered by the patch
+                    zone_area = zw * zh
+                    if patch_area > 0 and (
+                        overlap_area / patch_area > 0.5
+                        or (zone_area > 0 and overlap_area / zone_area > 0.4)
+                    ):
+                        return json.dumps({
+                            "status": "blocked",
+                            "message": (
+                                f"Region [{x},{y},{width},{height}] overlaps a screen device that was "
+                                f"verified as OFF by the screen verification agent. Do NOT protect "
+                                f"verified-off screens."
+                            ),
+                        })
+
         # Validate region
         if width < 10 or height < 10:
             return json.dumps({"status": "error", "message": f"Region too small ({width}x{height}). Minimum 10x10."})
+
+        # Reject absurdly large patches (>25% of image area) to prevent VLM overreaction
+        max_area = self.image.width * self.image.height * 0.25
+        if width * height > max_area:
+            return json.dumps({"status": "error", "message": f"Region too large ({width}x{height}={width*height}px). Max 25% of image ({int(max_area)}px)."})
 
         x = max(0, min(x, self.image.width - 10))
         y = max(0, min(y, self.image.height - 10))

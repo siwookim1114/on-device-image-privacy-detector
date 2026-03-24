@@ -180,6 +180,7 @@ class TextDetection(Detection):
     text_content: str
     text_type: Optional[str] = None   # phone_number, name, etc
     language: Optional[str] = "en"
+    polygon: Optional[List[List[int]]] = None  # EasyOCR 4-point quadrilateral
 
 class ObjectDetection(Detection):
     """Object detection result"""
@@ -235,6 +236,9 @@ class RiskAssessment(BaseModel):
     classification: Optional[PersonClassification] = None
     consent_status: Optional[ConsentStatus] = None
     consent_confidence: float = 0.0
+
+    # Text-specific: EasyOCR 4-point polygon for tighter overlay rendering
+    text_polygon: Optional[List[List[int]]] = None
 
 class RiskAnalysisResult(BaseModel):
     """Complete risk analysis results"""

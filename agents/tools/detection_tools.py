@@ -17,9 +17,9 @@ from utils.models import (
     BoundingBox,
 )
 from agents.tools.common import _parse_tool_input
+from agents.tools.text_backends import DBNetEasyOCRBackend
+from agents.tools.text_backends import EasyOCRBackend
 
-
-## Detection Tools for Detection Agent
 
 class FaceDetectionTool(BaseTool):
     """
@@ -240,6 +240,7 @@ class TextDetectionTool(BaseTool):
         "Use this tool when you need to detect and extract all text regions in an image during the detection phase."
     )
     detector: Any = None
+    backend: Any = None
     config: Any = None
 
     def __init__(self, config, **kwargs):
@@ -248,17 +249,27 @@ class TextDetectionTool(BaseTool):
         self._init_detector()
 
     def _init_detector(self):
-        """Initialize EasyOCR text detector"""
+        """Initialize text detection backend (EasyOCR or DBNet via config)."""
+        detection_cfg = getattr(getattr(self.config, 'models', None), 'detection', None)
+        backend_name = getattr(detection_cfg, 'text_detector', 'easyocr') if detection_cfg else 'easyocr'
+        options_cfg = getattr(detection_cfg, 'text_detector_options', None) if detection_cfg else None
+        dbnet_model = getattr(options_cfg, 'dbnet_model', 'db_resnet50') if options_cfg else 'db_resnet50'
+        gpu = self.config.system.device == "cuda"
         try:
-            self.detector = easyocr.Reader(
-                ["en"],
-                gpu = self.config.system.device == "cuda",
-                verbose = False
-            )
-            print("Text detection tool ready")
-
+            if backend_name == "dbnet":
+                try:
+                    self.backend = DBNetEasyOCRBackend(gpu=gpu, dbnet_model=dbnet_model)
+                except ImportError as ie:
+                    print(f"  DBNet import failed ({ie}), falling back to EasyOCR")
+                    self.backend = EasyOCRBackend(gpu=gpu)
+                    backend_name = "easyocr"
+            else:
+                self.backend = EasyOCRBackend(gpu=gpu)
+            self.detector = self.backend.reader  # Alias for _find_missing_values
+            print(f"  Text detection tool ready (backend: {backend_name}, model: {dbnet_model})")
         except Exception as e:
-            print(f"Text detector failed: {e}")
+            print(f"  Text detector failed: {e}")
+            self.backend = None
             self.detector = None
 
     def _classify_text_type(self, text: str) -> Dict[str, Any]:
@@ -506,6 +517,95 @@ class TextDetectionTool(BaseTool):
                     text["is_critical"] = is_critical
                     text["is_sensitive"] = True
 
+    def _merge_and_classify_numeric_fragments(self, texts: List[Dict]) -> None:
+        """
+        Merge adjacent numeric fragments and check for PII patterns.
+
+        When OCR splits "233-45-6789" into "233" and "45-6789", and the label
+        "Bank Account:" is missed by OCR, these fragments stay as unescalated
+        numeric_fragment items. This method groups spatially adjacent numeric
+        fragments, concatenates their text, and checks whether the combined
+        string matches a known PII format (SSN, bank account, credit card).
+
+        Only escalates when the merged pattern is a clear PII match.
+        Mutates the text dicts in-place.
+        """
+        # Collect unescalated numeric fragments
+        fragments = [t for t in texts
+                     if t["text_type"] == "numeric_fragment"
+                     and not t.get("is_critical", False)
+                     and not t.get("is_pii", False)]
+
+        if len(fragments) < 2:
+            return
+
+        # Sort by y-center then x position
+        fragments.sort(key=lambda t: (t["bbox"][1] + t["bbox"][3] / 2, t["bbox"][0]))
+
+        # Group fragments by spatial proximity (same row, close horizontally)
+        groups: List[List[Dict]] = []
+        used: set = set()
+
+        for i, frag in enumerate(fragments):
+            if i in used:
+                continue
+            group = [frag]
+            used.add(i)
+
+            # Iteratively extend the group with nearby fragments
+            changed = True
+            while changed:
+                changed = False
+                for j, other in enumerate(fragments):
+                    if j in used:
+                        continue
+                    # Check proximity against any member of the group
+                    for member in group:
+                        mcy = member["bbox"][1] + member["bbox"][3] / 2
+                        ocy = other["bbox"][1] + other["bbox"][3] / 2
+                        if abs(mcy - ocy) > 50:
+                            continue
+                        # Horizontal: gap between right edge of member and left edge of other
+                        m_right = member["bbox"][0] + member["bbox"][2]
+                        o_left = other["bbox"][0]
+                        o_right = other["bbox"][0] + other["bbox"][2]
+                        m_left = member["bbox"][0]
+                        gap = min(abs(o_left - m_right), abs(m_left - o_right))
+                        if gap < 80:
+                            group.append(other)
+                            used.add(j)
+                            changed = True
+                            break
+
+            if len(group) >= 2:
+                groups.append(group)
+
+        # PII patterns for merged text
+        PII_PATTERNS = [
+            (re.compile(r'^\d{3}-?\d{2}-?\d{4}$'), "ssn"),
+            (re.compile(r'^\d{8,12}$'), "bank_account"),
+            (re.compile(r'^\d{4}-?\d{4}-?\d{4}-?\d{4}$'), "credit_card"),
+            (re.compile(r'^\d{13,19}$'), "credit_card"),
+        ]
+
+        for group in groups:
+            # Sort by x position and merge text
+            group.sort(key=lambda t: t["bbox"][0])
+            merged = "".join(t.get("text_content", "").strip() for t in group)
+            # Also try with dashes between fragments
+            merged_dashed = "-".join(t.get("text_content", "").strip() for t in group)
+            # Strip internal whitespace/dashes for digit-only check
+            digits_only = re.sub(r'[^0-9]', '', merged)
+
+            for pattern, pii_type in PII_PATTERNS:
+                if pattern.match(merged) or pattern.match(merged_dashed) or pattern.match(digits_only):
+                    for frag in group:
+                        frag["text_type"] = pii_type
+                        frag["is_pii"] = True
+                        frag["is_critical"] = True
+                        frag["is_sensitive"] = True
+                    break
+
     def _find_missing_values(self, texts: List[Dict], image_path: str) -> List[Dict]:
         """
         Third pass: find values near labels that have no nearby classified value.
@@ -599,7 +699,8 @@ class TextDetectionTool(BaseTool):
                     crop_array = np.array(crop)
 
                     ocr_results = self.detector.readtext(
-                        crop_array, width_ths=0.1, paragraph=False
+                        crop_array, width_ths=0.1, low_text=0.15,
+                        paragraph=False
                     )
 
                     for (box_pts, text_content, conf) in ocr_results:
@@ -656,37 +757,24 @@ class TextDetectionTool(BaseTool):
 
     def _run(self, image_path: str) -> str:
         """Run text detection on an image"""
-        if self.detector is None:
+        if self.backend is None:
             return json.dumps({"error": "Text detector not available", "texts": [], "count": 0})
 
         try:
             image = Image.open(image_path)
             img_array = np.array(image)
-            results = self.detector.readtext(img_array, width_ths=0.7, low_text=0.3, paragraph=False)
+            detections = self.backend.detect(img_array)
             texts = []
 
-            for idx, detection in enumerate(results):
-                bbox_points, text, confidence = detection
-
-                if confidence < 0.3:  # Lower threshold to catch more text
-                    continue
-
-                x_coords = [p[0] for p in bbox_points]
-                y_coords = [p[1] for p in bbox_points]
-
-                # Classify text type for privacy assessment
-                classification = self._classify_text_type(text)
+            for idx, region in enumerate(detections):
+                classification = self._classify_text_type(region.text)
 
                 texts.append({
                     "id": f"text_{idx}",
-                    "text_content": text,
-                    "bbox": [
-                        int(min(x_coords)),
-                        int(min(y_coords)),
-                        int(max(x_coords) - min(x_coords)),
-                        int(max(y_coords) - min(y_coords))
-                    ],
-                    "confidence": float(confidence),
+                    "text_content": region.text,
+                    "bbox": region.bbox,
+                    "polygon": region.polygon,
+                    "confidence": region.confidence,
                     "text_type": classification["type"],
                     "is_sensitive": classification["is_sensitive"],
                     "is_pii": classification["is_pii"],
@@ -697,6 +785,10 @@ class TextDetectionTool(BaseTool):
             # Second pass: propagate label classifications to nearby unclassified values
             img_width, img_height = image.size
             self._propagate_labels_to_values(texts, img_width, img_height)
+
+            # Pass 2.5: merge adjacent numeric fragments into PII patterns
+            # Catches cases where OCR missed the label (e.g., "233" + "45-6789" = SSN)
+            self._merge_and_classify_numeric_fragments(texts)
 
             # Third pass: find missing values near labels via targeted re-crop
             new_values = self._find_missing_values(texts, image_path)
