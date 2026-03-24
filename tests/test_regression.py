@@ -13,6 +13,8 @@ import json
 import math
 import pytest
 from pathlib import Path
+import inspect
+from agents.tools.text_backends import EasyOCRBackend
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -93,20 +95,16 @@ class TestEasyOCRWidthThs:
     """
 
     def test_width_ths_in_source(self):
-        """_run() source code must contain width_ths=0.7."""
-        import inspect
-        from agents.tools.detection_tools import TextDetectionTool
-        source = inspect.getsource(TextDetectionTool._run)
+        """EasyOCR backend must use width_ths=0.7."""
+        source = inspect.getsource(EasyOCRBackend.detect)
         assert "width_ths=0.7" in source, (
-            "EasyOCR readtext() call in TextDetectionTool._run must use width_ths=0.7 "
+            "EasyOCR readtext() call in EasyOCRBackend.detect must use width_ths=0.7 "
             "to prevent text fragmentation"
         )
 
     def test_low_text_param_present(self):
-        """_run() source must also pass low_text threshold to EasyOCR."""
-        import inspect
-        from agents.tools.detection_tools import TextDetectionTool
-        source = inspect.getsource(TextDetectionTool._run)
+        """EasyOCR backend must pass low_text threshold."""
+        source = inspect.getsource(EasyOCRBackend.detect)
         assert "low_text" in source, (
             "EasyOCR readtext() call must pass low_text parameter for OCR sensitivity"
         )
