@@ -29,6 +29,7 @@ sys.path.insert(0, str(project_root / "utils"))
 
 from utils.config import load_config
 from utils.models import RiskLevel, PrivacyProfile
+from utils.segmentation import PrecisionSegmenter
 from utils.visualization import export_risk_results_json, generate_risk_map, export_strategy_results_json, generate_protection_preview
 from utils.storage import FaceDatabase
 from agents.detection_agent import DetectionAgent
@@ -36,6 +37,7 @@ from agents.risk_assessment_agent import RiskAssessmentAgent
 from agents.consent_identity_agent import ConsentIdentityAgent
 from agents.strategy_agent import StrategyAgent
 from agents.execution_agent import ExecutionAgent
+
 
 # Test database (separate from production)
 TEST_DB_NAME = "privacy_guard_test_pipeline"
@@ -298,7 +300,6 @@ def test_full_pipeline(
             if not fallback_only:
                 print(f"\n  Phase D.5: SAM Segmentation...")
                 try:
-                    from utils.segmentation import PrecisionSegmenter
                     if not hasattr(test_full_pipeline, '_segmenter'):
                         test_full_pipeline._segmenter = PrecisionSegmenter(device="cpu")
                     segmenter = test_full_pipeline._segmenter

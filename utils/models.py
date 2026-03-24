@@ -61,15 +61,62 @@ class ConsentStatus(str, Enum):
     UNCLEAR = "unclear"                            # Requires confirmation
 
 
+# Privacy Profile Sub-Models
+
+class FaceSensitivitySettings(BaseModel):
+    """Per-identity-class sensitivity thresholds for face detection."""
+    bystander_sensitivity: str = "critical"      # RiskLevel value
+    known_contact_sensitivity: str = "high"
+    self_sensitivity: str = "medium"
+    min_face_size_px: int = Field(default=30, ge=10, le=100)
+
+
+class TextSensitivitySettings(BaseModel):
+    """Boolean flags controlling which text categories trigger protection."""
+    protect_ssn: bool = True                     # BLOCK-guarded — cannot be False
+    protect_credit_card: bool = True             # BLOCK-guarded
+    protect_passwords: bool = True               # BLOCK-guarded
+    protect_phone_numbers: bool = True
+    protect_email_addresses: bool = True
+    protect_addresses: bool = False
+    protect_names: bool = False
+    protect_numeric_fragments: bool = True
+    protect_generic_text: bool = False
+
+
+class ScreenSensitivitySettings(BaseModel):
+    """Controls when screen devices are protected."""
+    protect_screens_when_on: bool = True
+    protect_screens_when_off: bool = False
+    own_devices_unprotected: bool = True
+
+
+class ObjectSensitivitySettings(BaseModel):
+    """Controls which object categories receive protection."""
+    protect_license_plates: bool = True
+    protect_personal_documents: bool = True
+    protect_other_objects: bool = False
+
+
+class ContactEntry(BaseModel):
+    """A single known contact entry in the user's contact list."""
+    person_id: str
+    display_name: str
+    relationship: str = "friend"                 # family, friend, colleague, other
+    consent_level: str = "assumed"              # explicit, assumed, none
+
+
 # Privacy Profile Models
 class PrivacyProfile(BaseModel):
     """User's privacy preferences and sensitivity settings"""
-    user_id: str = Field(default_factory = lambda: str(uuid.uuid4()))  
+    user_id: str = Field(default_factory = lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory = datetime.now)
     updated_at: datetime = Field(default_factory = datetime.now)
 
-    # Identity Sensitivity
-    identity_sensitivity: Dict[str, str] = Field(
+    # Legacy sensitivity dicts — preserved for backward compatibility.
+    # New code reads from the structured sub-models below; these fields are
+    # accepted if present in existing MongoDB documents and ignored.
+    identity_sensitivity: Optional[Dict[str, str]] = Field(
         default_factory = lambda: {
             "own_face": "medium",
             "family_faces": "high",
@@ -78,8 +125,7 @@ class PrivacyProfile(BaseModel):
         }
     )
 
-    # Information Sensitivity
-    information_sensitivity: Dict[str, str] = Field(
+    information_sensitivity: Optional[Dict[str, str]] = Field(
         default_factory = lambda: {
             "personal_numbers": "critical",
             "documents": "high",
@@ -88,8 +134,7 @@ class PrivacyProfile(BaseModel):
         }
     )
 
-    # Location Sensitivity
-    location_sensitivity: Dict[str, str] = Field(
+    location_sensitivity: Optional[Dict[str, str]] = Field(
         default_factory = lambda: {
             "home_address": "critical",
             "license_plates": "high",
@@ -98,8 +143,7 @@ class PrivacyProfile(BaseModel):
         }
     )
 
-    # Context Sensitivity
-    context_sensitivity: Dict[str, str] = Field(
+    context_sensitivity: Optional[Dict[str, str]] = Field(
         default_factory = lambda: {
             "background_items": "medium",
             "reflections": "medium",
@@ -107,9 +151,50 @@ class PrivacyProfile(BaseModel):
         }
     )
 
-    # Default preferences
+    # Default preferences (preserved)
     default_mode: str = "hybrid"     # manual, hybrid, auto
     ethical_mode: str = "balanced"   # strict, balanced, creative
+
+    # ---- Identity block -------------------------------------------------------
+    display_name: Optional[str] = None
+    self_person_id: Optional[str] = None
+    face_enrollment_count: int = 0
+    known_contacts: List[ContactEntry] = Field(default_factory=list)
+
+    # ---- Structured sensitivity (replaces loose dicts for new code) -----------
+    face_settings: FaceSensitivitySettings = Field(
+        default_factory=FaceSensitivitySettings
+    )
+    text_settings: TextSensitivitySettings = Field(
+        default_factory=TextSensitivitySettings
+    )
+    screen_settings: ScreenSensitivitySettings = Field(
+        default_factory=ScreenSensitivitySettings
+    )
+    object_settings: ObjectSensitivitySettings = Field(
+        default_factory=ObjectSensitivitySettings
+    )
+
+    # ---- Preferred obfuscation methods per element type ----------------------
+    preferred_face_method: str = "blur"
+    preferred_text_method: str = "solid_overlay"
+    preferred_screen_method: str = "blur"
+    preferred_object_method: str = "blur"
+
+    # ---- HITL preferences ----------------------------------------------------
+    auto_advance_threshold: str = "medium"   # never, low, medium, high
+    pause_on_critical: bool = True
+    pause_on_new_faces: bool = True
+    require_confirm_on_bystander_unprotect: bool = True
+
+    # ---- Custom risk threshold overrides -------------------------------------
+    # Keys: "face_bystander", "face_known", "face_self", "text_ssn", etc.
+    # Values: RiskLevel string (critical / high / medium / low)
+    threshold_overrides: Dict[str, str] = Field(default_factory=dict)
+
+    # ---- Meta ----------------------------------------------------------------
+    onboarding_complete: bool = False
+    profile_version: int = 1
 
     class Config:
         use_enum_values = True

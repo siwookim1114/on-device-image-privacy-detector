@@ -1,48 +1,47 @@
-## Risk Assessment Tools
 """
-Risk Assessment Tools - Specialized tools for comprehensive privacy risk analysis
+Risk Assessment Tools - Specialized tools for comprehensive privacy risk analysis.
+
 The agent uses these factors to generate VLM-based reasoning.
 
-  Architecture:
-      Tools = Pure calculation (fast, deterministic)
-      Agent = VLM reasoning (contextual, batched)
+Architecture:
+    Tools = Pure calculation (fast, deterministic)
+    Agent = VLM reasoning (contextual, batched)
 
-  Phase 1: Individual Element Assessment (rule-based calculation)
-      - FaceRiskAssessmentTool
-      - TextRiskAssessmentTool
-      - ObjectRiskAssessmentTool
+Phase 1: Individual Element Assessment (rule-based calculation)
+    - FaceRiskAssessmentTool
+    - TextRiskAssessmentTool
+    - ObjectRiskAssessmentTool
 
-  Phase 2: Contextual Enhancement (spatial reasoning)
-      - SpatialRelationshipTool
-      - ConsentInferenceTool
-      - RiskEscalationTool
+Phase 2: Contextual Enhancement (spatial reasoning)
+    - SpatialRelationshipTool
+    - ConsentInferenceTool
+    - RiskEscalationTool
 
-  Phase 3: Validation & Filtering (quality control)
-      - FalsePositiveFilterTool
-      - ConsistencyValidationTool
+Phase 3: Validation & Filtering (quality control)
+    - FalsePositiveFilterTool
+    - ConsistencyValidationTool
 """
 
 import json
 import re
-import numpy as np
-from typing import Any, List, Dict, Optional, ClassVar, Set, Tuple, Type, Union
+from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
 
-from PIL import Image
+import numpy as np
 from langchain.tools import BaseTool
-from pydantic import BaseModel, Field
+from PIL import Image
+from pydantic import BaseModel
+
+from agents.tools.common import _parse_tool_input, get_risk_color
 from utils.models import (
-    RiskLevel,
-    RiskType,
-    PrivacyProfile,
+    BatchReclassifyInput,
     BoundingBox,
     ConsentStatus,
+    PrivacyProfile,
     ReclassifyAssessmentInput,
-    ReclassifyItem,
-    BatchReclassifyInput,
-    SplitPart,
+    RiskLevel,
+    RiskType,
     SplitAssessmentInput,
 )
-from agents.tools.common import _parse_tool_input, get_risk_color
 
 
 class FaceRiskAssessmentTool(BaseTool):
@@ -197,29 +196,16 @@ class FaceRiskAssessmentTool(BaseTool):
             # Infer clarity from quality indicators
             clarity = data.get("clarity", "medium")
 
-            # Calculate all factors
-
-            # Step 1: Get base risk from user sensitivity
             base_risk = self._get_base_risk(consent_status)
 
-            # Step 2: Calculate escalation factors
             size_esc = self.SIZE_ESCALATION.get(size, 0)
             clarity_esc = self.CLARITY_ESCALATION.get(clarity, 0)
             position_esc, position_desc = self._calculate_position_factor(bbox, image_width, image_height)
-
-            # Confidence adjustment: very low confidence reduces risk
             confidence_esc = -1 if confidence < 0.85 else 0
-
-            # Total escalation
             total_escalation = size_esc + clarity_esc + position_esc + confidence_esc
 
-            # Step 3: Calculate final risk
             final_risk = self._escalate_risk(base_risk, total_escalation)
-
-            # Step 4: Determine protection requirement
             requires_protection = final_risk in [RiskLevel.CRITICAL, RiskLevel.HIGH]
-
-            # Get sensitivity applied
             sensitivity_applied = {
                 "none": "bystander_faces",
                 "explicit": "own_face",
@@ -968,12 +954,9 @@ class ConsistencyValidationTool(BaseTool):
             })
 
 
-#  Phase 2: VLM Review Tools
-"""
-Phase 2 tools are used by the VLM agent to review and modify Phase 1 assessments.
-Each tool receives a reference to the shared assessments list and modifies it in-place.
-The agent dynamically decides which tools to call based on visual evidence.
-"""
+# --- Phase 2: VLM Review Tools ---
+# Tools receive a reference to the shared assessments list and modify it in-place.
+
 
 class ReclassifyAssessmentTool(BaseTool):
     """Reclassify assessment severity based on visual evidence. Actual modifications in-place."""
@@ -1110,7 +1093,7 @@ class BatchReclassifyTool(BaseTool):
         results = []
 
         for item in reclassifications:
-            # Handle both dict and ReclassifyItem
+            # Handle both dict and Pydantic model
             if hasattr(item, 'index'):
                 index, severity, reason = item.index, item.severity, item.reason
             else:

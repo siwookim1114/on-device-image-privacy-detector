@@ -23,38 +23,33 @@ Input:  StrategyRecommendations + RiskAnalysisResult + original image path
 Output: ExecutionReport + protected image file
 """
 
-import json
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 from PIL import Image, ImageDraw
-
-from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
-from langgraph.errors import GraphRecursionError
 from langchain_core.messages import HumanMessage
+from langgraph.errors import GraphRecursionError
 
+from agents.agent_factory import build_vlm_agent, create_vlm, resize_for_vlm
+from agents.tools import (
+    AddProtectionTool,
+    FinalizeVerificationTool,
+    GetProtectionStatusTool,
+    PatchRegionTool,
+)
 from utils.models import (
+    BoundingBox,
+    ExecutionReport,
+    ObfuscationMethod,
+    ProtectionStrategy,
     RiskAnalysisResult,
     StrategyRecommendations,
-    ProtectionStrategy,
-    ExecutionReport,
     TransformationResult,
-    ObfuscationMethod,
-    BoundingBox,
 )
 from utils.visualization import _apply_obfuscation_bbox, _apply_obfuscation_mask
-from agents.local_wrapper import VisionLLM
-from agents.agent_factory import create_vlm, resize_for_vlm, build_vlm_agent
-from agents.tools import (
-    PatchRegionTool,
-    AddProtectionTool,
-    GetProtectionStatusTool,
-    FinalizeVerificationTool,
-)
 
 
 class ExecutionAgent:

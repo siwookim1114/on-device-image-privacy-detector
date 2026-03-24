@@ -1,0 +1,235 @@
+steps:
+  - id: identity
+    title: "Who are you?"
+    description: "So we never blur YOUR face by accident."
+    required: true
+    fields:
+      - id: display_name
+        type: text
+        label: "Name or Label"
+        placeholder: "e.g. Alice, Me"
+        required: true
+      - id: face_photos
+        type: file_multi
+        label: "Your Face Photos"
+        accept: "image/*"
+        min: 0
+        max: 5
+      - id: self_sensitivity
+        type: radio
+        label: "How should your own face be treated by default?"
+        required: false
+        options:
+          - value: low
+            label: "Never blur my face"
+            description: "Your face is always left unprotected"
+          - value: medium
+            label: "Blur my face like anyone else"
+            description: "Context-dependent protection"
+            default: true
+          - value: critical
+            label: "Always protect my face"
+            description: "Your face is always blurred"
+
+  - id: contacts
+    title: "People you know"
+    description: "Add contacts so the system recognizes them and applies consent-aware treatment."
+    required: false
+    repeatable: true
+    fields:
+      - id: name
+        type: text
+        label: "Name"
+        required: true
+      - id: relationship
+        type: select
+        label: "Relationship"
+        options:
+          - value: family
+            label: "Family"
+          - value: friend
+            label: "Friend"
+          - value: colleague
+            label: "Colleague"
+          - value: other
+            label: "Other"
+      - id: consent_level
+        type: radio
+        label: "Consent level"
+        options:
+          - value: explicit
+            label: "Always show their face"
+            description: "Person has directly given permission — never blur them"
+          - value: assumed
+            label: "Ask me each time"
+            description: "Implied consent from relationship — system will confirm per session"
+            default: true
+          - value: none
+            label: "Always blur them"
+            description: "No consent — apply full protection"
+      - id: photos
+        type: file_multi
+        label: "Photos"
+        accept: "image/*"
+        min: 0
+        max: 5
+
+  - id: sensitivity
+    title: "How should we protect your images?"
+    required: true
+    fields:
+      - id: faces
+        type: segmented
+        label: "Unknown faces"
+        options:
+          - value: paranoid
+            label: "Paranoid"
+            description: "Blur ALL faces including contacts"
+          - value: cautious
+            label: "Cautious"
+            description: "Blur unknown faces, keep recognized contacts"
+            default: true
+          - value: relaxed
+            label: "Relaxed"
+            description: "Only blur faces in sensitive contexts"
+      - id: text
+        type: segmented
+        label: "Text / PII"
+        options:
+          - value: maximum
+            label: "Maximum"
+            description: "Protect all detected text including names and labels"
+          - value: standard
+            label: "Standard"
+            description: "SSN, credit cards, passwords, phone numbers, emails"
+            default: true
+          - value: minimal
+            label: "Minimal"
+            description: "Only SSN and credit card numbers (locked minimum)"
+      - id: screens
+        type: segmented
+        label: "Screen devices"
+        options:
+          - value: always
+            label: "Always"
+            description: "Blur any visible screen regardless of state"
+          - value: smart
+            label: "Smart"
+            description: "Only blur screens that are visibly ON"
+            default: true
+          - value: never
+            label: "Never"
+            description: "Do not protect any screens"
+      - id: objects
+        type: segmented
+        label: "Other objects"
+        options:
+          - value: include
+            label: "Include"
+            description: "License plates, documents, and other sensitive items"
+          - value: standard
+            label: "Standard"
+            description: "License plates and personal documents only"
+            default: true
+          - value: minimal
+            label: "Minimal"
+            description: "Skip object protection entirely"
+      - id: processing_mode
+        type: segmented
+        label: "How automated should processing be?"
+        options:
+          - value: manual
+            label: "Show me every decision"
+            description: "You review and approve each protection"
+          - value: hybrid
+            label: "Show me critical decisions only"
+            description: "Auto-protect LOW/MEDIUM, pause on CRITICAL and HIGH"
+            default: true
+          - value: auto
+            label: "Protect automatically"
+            description: "Full automation — review results after processing"
+
+  - id: advanced
+    title: "Advanced Settings"
+    required: false
+    collapsed: true
+    fields:
+      - id: preferred_face_method
+        type: select
+        label: "Default face protection method"
+        options:
+          - value: blur
+            label: "Blur (soft, natural-looking)"
+            default: true
+          - value: pixelate
+            label: "Pixelate (visible protection)"
+          - value: solid_overlay
+            label: "Solid overlay (strongest)"
+          - value: avatar_replace
+            label: "Avatar Replace (balanced / creative modes only)"
+      - id: preferred_text_method
+        type: select
+        label: "Default text protection method"
+        options:
+          - value: solid_overlay
+            label: "Solid overlay (recommended for text)"
+            default: true
+          - value: blur
+            label: "Blur"
+          - value: pixelate
+            label: "Pixelate"
+      - id: preferred_screen_method
+        type: select
+        label: "Default screen protection method"
+        options:
+          - value: blur
+            label: "Blur"
+            default: true
+          - value: pixelate
+            label: "Pixelate"
+          - value: solid_overlay
+            label: "Solid overlay"
+      - id: ethical_mode
+        type: radio
+        label: "Privacy philosophy"
+        options:
+          - value: strict
+            label: "No deception"
+            description: "Only blur, pixelate, and solid overlay — no generative replacement"
+          - value: balanced
+            label: "Context-preserving"
+            description: "Avatar replacement and inpainting allowed"
+            default: true
+          - value: creative
+            label: "Full power"
+            description: "Any method available (output is watermarked)"
+      - id: auto_advance_threshold
+        type: segmented
+        label: "When to pause for your review"
+        options:
+          - value: never
+            label: "Always review"
+            description: "Pause before every protection"
+          - value: low
+            label: "Review often"
+            description: "Auto-advance only on very low risk"
+          - value: medium
+            label: "Balanced"
+            description: "Auto-advance LOW and MEDIUM, pause on HIGH and CRITICAL"
+            default: true
+          - value: high
+            label: "Rarely review"
+            description: "Auto-advance everything except CRITICAL"
+      - id: min_face_size_px
+        type: slider
+        label: "Minimum face size to protect (px)"
+        min: 10
+        max: 100
+        default: 30
+        description: "Faces smaller than this pixel dimension are ignored"
+
+  - id: review
+    title: "Review your profile"
+    description: "Confirm your settings before we save them."
+    required: true
+    type: summary

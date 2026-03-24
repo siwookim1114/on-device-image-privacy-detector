@@ -1,0 +1,109 @@
+# =============================================================================
+# .dockerignore — On-Device Image Privacy Detector
+# =============================================================================
+# The build context root is the repo root (for the backend image) and
+# frontend/ (for the frontend image).  Exclude everything that doesn't need
+# to land in a container layer to keep builds fast and images lean.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Version control
+# ---------------------------------------------------------------------------
+.git
+.gitignore
+.gitattributes
+
+# ---------------------------------------------------------------------------
+# Python runtime artifacts
+# ---------------------------------------------------------------------------
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+*.egg
+.eggs
+dist/
+build/
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+htmlcov/
+*.log
+
+# ---------------------------------------------------------------------------
+# Virtual environments & conda
+# ---------------------------------------------------------------------------
+venv/
+.venv/
+env/
+.env/
+conda/
+miniconda/
+
+# ---------------------------------------------------------------------------
+# Node.js (frontend build artifacts in repo root, if any)
+# ---------------------------------------------------------------------------
+node_modules/
+frontend/node_modules/
+frontend/dist/
+npm-debug.log*
+
+# ---------------------------------------------------------------------------
+# Large binary model files — these MUST NOT be baked into the image.
+# ML weights are downloaded at runtime into the ml_model_cache volume.
+# ---------------------------------------------------------------------------
+*.pt
+*.pth
+*.ckpt
+*.gguf
+*.safetensors
+backend-engines/
+
+# ---------------------------------------------------------------------------
+# Data directories — bind-mounted at runtime via docker-compose volumes.
+# Never copy user data, results, or face embeddings into an image.
+# ---------------------------------------------------------------------------
+data/
+logs/
+runs/
+outputs/
+
+# ---------------------------------------------------------------------------
+# Test fixtures and test outputs
+# ---------------------------------------------------------------------------
+tests/
+*.test.ts
+*.spec.ts
+
+# ---------------------------------------------------------------------------
+# Documentation and planning files
+# ---------------------------------------------------------------------------
+docs/
+*.md
+*.pdf
+*.png
+*.jpg
+*.jpeg
+# Exception: keep a small favicon / logo if present (unlikely at repo root)
+
+# ---------------------------------------------------------------------------
+# IDE / OS cruft
+# ---------------------------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+
+# ---------------------------------------------------------------------------
+# Secrets — never in images
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.key
+*.pem
+*.p12
+data/face_db/.encryption_key

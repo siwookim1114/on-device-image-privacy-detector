@@ -1,6 +1,29 @@
-version: '3.8'
+# =============================================================================
+# On-Device Image Privacy Detector — Docker Compose
+# =============================================================================
+#
+# WHAT RUNS IN DOCKER:
+#   - mongodb   : data store (port 27017)
+#   - backend   : FastAPI + ML pipeline — CPU-only inside container (port 8000)
+#   - frontend  : nginx serving the React build (port 80)
+#
+# WHAT RUNS ON THE HOST (macOS / Apple Silicon):
+#   - llama-server : VLM inference with Metal GPU (port 8081)
+#     Start with:  bash start_llama_server.sh
+#
+# QUICK START:
+#   1. bash start_llama_server.sh          # Terminal 1 — host GPU inference
+#   2. docker compose up --build           # Terminal 2 — everything else
+#
+# The backend reaches llama-server via host.docker.internal:8081
+# (Docker Desktop for Mac sets this automatically).
+# =============================================================================
 
 services:
+
+  # ---------------------------------------------------------------------------
+  # MongoDB 7.0
+  # ---------------------------------------------------------------------------
   mongodb:
     image: mongo:7.0
     container_name: privacy_guard_mongodb
@@ -9,14 +32,93 @@ services:
     volumes:
       - mongodb_data:/data/db
     environment:
-      - MONGO_INITDB_DATABASE=privacy_guard
+      MONGO_INITDB_DATABASE: privacy_guard
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
+  # ---------------------------------------------------------------------------
+  # FastAPI Backend
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+    container_name: privacy_guard_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # ML model cache — persisted so re-starts don't re-download ~5 GB
+      - ml_model_cache:/root/.cache
+      # Pipeline data directories — host paths so results are readable locally
+      - ./data/tmp_uploads:/app/data/tmp_uploads
+      - ./data/full_pipeline_results:/app/data/full_pipeline_results
+      - ./data/face_db:/app/data/face_db
+      - ./data/provenance_logs:/app/data/provenance_logs
+      # Config — mount as read-only so experiments don't overwrite it
+      - ./configs:/app/configs:ro
+      # YOLO weights live at repo root
+      - ./yolov8n.pt:/app/yolov8n.pt:ro
+    environment:
+      # Override pydantic-settings defaults to point at Docker service names
+      PRIVACY_MONGO_URL: "mongodb://mongodb:27017"
+      PRIVACY_MONGO_DB: "privacy_guard"
+      PRIVACY_FRONTEND_URL: "http://localhost"
+      # llama-server is on the HOST, not in Docker
+      PRIVACY_VLM_HEALTH_URL: "http://host.docker.internal:8081/health"
+      VLM_BASE_URL: "http://host.docker.internal:8081/v1"
+      # Pipeline paths inside the container
+      PRIVACY_PIPELINE_CONFIG_PATH: "/app/configs/config.yaml"
+      PRIVACY_UPLOAD_DIR: "/app/data/tmp_uploads"
+      PRIVACY_RESULTS_DIR: "/app/data/full_pipeline_results"
+      # Force CPU — MPS is unavailable inside Docker on macOS
+      FORCE_CPU: "1"
+      # Torch/HuggingFace/EasyOCR cache dirs inside the named volume
+      TORCH_HOME: "/root/.cache/torch"
+      HF_HOME: "/root/.cache/huggingface"
+      EASYOCR_MODULE_PATH: "/root/.cache/easyocr"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s   # First start downloads ML models — give it time
+
+  # ---------------------------------------------------------------------------
+  # React Frontend (nginx)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: frontend
+      dockerfile: ../docker/frontend/Dockerfile
+      args:
+        # Vite bakes this into the JS bundle at build time
+        VITE_API_BASE_URL: "http://localhost:8000/api/v1"
+        VITE_WS_BASE_URL: "ws://localhost:8000"
+    container_name: privacy_guard_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+
+# =============================================================================
+# Volumes
+# =============================================================================
 volumes:
   mongodb_data:
     name: privacy_guard_mongodb_data
+
+  # Named volume for all ML model weights (~5 GB on first run).
+  # Survives `docker compose down` — use `docker volume rm` to purge.
+  ml_model_cache:
+    name: privacy_guard_ml_cache
