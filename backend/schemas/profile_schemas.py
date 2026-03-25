@@ -11,11 +11,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
-
-
-# ---------------------------------------------------------------------------
 # Nested settings — mirrored from utils.models but kept explicit for OpenAPI
-# ---------------------------------------------------------------------------
 
 class FaceSensitivityRequest(BaseModel):
     bystander_sensitivity: Optional[str] = None   # critical | high | medium | low
@@ -81,11 +77,7 @@ class ContactEntryRequest(BaseModel):
         if v.lower() not in allowed:
             raise ValueError(f"consent_level must be one of {sorted(allowed)}")
         return v.lower()
-
-
-# ---------------------------------------------------------------------------
 # Create request
-# ---------------------------------------------------------------------------
 
 class CreateProfileRequest(BaseModel):
     """Payload for POST /api/v1/profile (onboarding completion)."""
@@ -157,11 +149,7 @@ class CreateProfileRequest(BaseModel):
         if v not in allowed:
             raise ValueError(f"method must be one of {sorted(allowed)}")
         return v
-
-
-# ---------------------------------------------------------------------------
 # Update request (all fields optional — partial update semantics)
-# ---------------------------------------------------------------------------
 
 class UpdateProfileRequest(BaseModel):
     """Payload for PUT /api/v1/profile (partial update)."""
@@ -226,11 +214,7 @@ class UpdateProfileRequest(BaseModel):
         if v not in allowed:
             raise ValueError(f"method must be one of {sorted(allowed)}")
         return v
-
-
-# ---------------------------------------------------------------------------
 # Response models
-# ---------------------------------------------------------------------------
 
 class ContactEntryResponse(BaseModel):
     person_id: str
@@ -326,11 +310,7 @@ class ProfileDeletedResponse(BaseModel):
 
     user_id: str
     message: str = "Profile deleted successfully."
-
-
-# ---------------------------------------------------------------------------
 # Questionnaire response (static structure served from YAML)
-# ---------------------------------------------------------------------------
 
 class QuestionnaireField(BaseModel):
     id: str

@@ -34,10 +34,7 @@ try:
 except ImportError:
     _PILImage = None  # type: ignore[assignment]
     _PIL_AVAILABLE = False
-
-# ---------------------------------------------------------------------------
 # Constants
-# ---------------------------------------------------------------------------
 
 ALLOWED_MIME: frozenset[str] = frozenset({
     "image/jpeg",
@@ -53,10 +50,7 @@ MAX_DIMENSION: int = 8192
 
 # Maximum number of characters in a single chat message.
 MAX_CHAT_LENGTH: int = 2000
-
-# ---------------------------------------------------------------------------
 # Prompt-injection detection patterns
-# ---------------------------------------------------------------------------
 
 # Compiled once at import time for performance.  Any match is treated as a
 # potential injection attempt and results in a 400 VALIDATION_ERROR.
@@ -75,10 +69,7 @@ INJECTION_PATTERNS: list[re.Pattern[str]] = [
     re.compile(p, re.IGNORECASE | re.UNICODE)
     for p in _RAW_INJECTION_PATTERNS
 ]
-
-# ---------------------------------------------------------------------------
 # Standard error envelope factory
-# ---------------------------------------------------------------------------
 
 
 def _error_response(code: str, message: str, details: Optional[dict] = None) -> dict:
@@ -89,11 +80,7 @@ def _error_response(code: str, message: str, details: Optional[dict] = None) -> 
             "details": details or {},
         }
     }
-
-
-# ---------------------------------------------------------------------------
 # Image upload validation
-# ---------------------------------------------------------------------------
 
 
 async def validate_image_upload(file: UploadFile) -> bytes:
@@ -119,7 +106,6 @@ async def validate_image_upload(file: UploadFile) -> bytes:
     bytes
         Raw file content ready for downstream processing.
     """
-    # --- 1. MIME type check ---
     content_type = (file.content_type or "").lower().split(";")[0].strip()
     if content_type not in ALLOWED_MIME:
         raise HTTPException(
@@ -133,8 +119,6 @@ async def validate_image_upload(file: UploadFile) -> bytes:
                 details={"received_content_type": content_type},
             ),
         )
-
-    # --- 2. File size check ---
     # Read in chunks to avoid loading a potentially giant file in one shot
     # before we know it is within the limit.
     chunks: list[bytes] = []
@@ -160,8 +144,6 @@ async def validate_image_upload(file: UploadFile) -> bytes:
         chunks.append(chunk)
 
     raw_bytes: bytes = b"".join(chunks)
-
-    # --- 3. Decodability check + 4. Dimension check ---
     if not _PIL_AVAILABLE:
         # If Pillow is not installed we can still accept the bytes; dimension
         # checks will be skipped with a warning.  This should not happen in a
@@ -217,11 +199,7 @@ async def validate_image_upload(file: UploadFile) -> bytes:
         )
 
     return raw_bytes
-
-
-# ---------------------------------------------------------------------------
 # Chat message sanitisation
-# ---------------------------------------------------------------------------
 
 
 def sanitize_chat_message(message: str) -> str:
@@ -247,7 +225,6 @@ def sanitize_chat_message(message: str) -> str:
     HTTPException 400 VALIDATION_ERROR
         On length violation or detected injection pattern.
     """
-    # --- Type guard ---
     if not isinstance(message, str):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -256,8 +233,6 @@ def sanitize_chat_message(message: str) -> str:
                 message="Chat message must be a string.",
             ),
         )
-
-    # --- Length limit ---
     if len(message) > MAX_CHAT_LENGTH:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -270,11 +245,7 @@ def sanitize_chat_message(message: str) -> str:
                 details={"max_length": MAX_CHAT_LENGTH, "received_length": len(message)},
             ),
         )
-
-    # --- Unicode normalisation ---
     message = unicodedata.normalize("NFC", message)
-
-    # --- Strip control characters ---
     # Keep printable characters, newline (\n, \r), and horizontal tab (\t).
     # Removes DEL (0x7F), C1 range (0x80–0x9F), and C0 below 0x09.
     sanitised_chars: list[str] = []
@@ -286,8 +257,6 @@ def sanitize_chat_message(message: str) -> str:
         # All other control characters are silently dropped
 
     sanitised = "".join(sanitised_chars).strip()
-
-    # --- Injection pattern scan ---
     for pattern in INJECTION_PATTERNS:
         if pattern.search(sanitised):
             raise HTTPException(

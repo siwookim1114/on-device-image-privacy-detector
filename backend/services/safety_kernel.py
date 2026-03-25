@@ -22,10 +22,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
 # Enumerations
-# ---------------------------------------------------------------------------
 
 
 class ProtectionBeneficiary(str, Enum):
@@ -38,11 +35,7 @@ class SafetyAction(str, Enum):
     ALLOW = "allow"
     BLOCK = "block"
     CHALLENGE = "challenge"
-
-
-# ---------------------------------------------------------------------------
 # Strength tables (used for "is this a strengthening move?" comparisons)
-# ---------------------------------------------------------------------------
 
 # Higher value = stronger protection.  "none" (0) means no protection at all.
 METHOD_STRENGTH: Dict[str, int] = {
@@ -61,11 +54,7 @@ SEVERITY_RANK: Dict[str, int] = {
     "high": 2,
     "critical": 3,
 }
-
-
-# ---------------------------------------------------------------------------
 # OverrideRecord — immutable audit log entry
-# ---------------------------------------------------------------------------
 
 
 class OverrideRecord(BaseModel):
@@ -84,11 +73,7 @@ class OverrideRecord(BaseModel):
     rule_id: Optional[str] = None   # which rule fired, e.g. "BLOCK_THIRD_PARTY_UNPROTECT"
     reason: str = ""
     user_confirmed: bool = False
-
-
-# ---------------------------------------------------------------------------
 # SafetyKernel
-# ---------------------------------------------------------------------------
 
 
 class SafetyKernel:
@@ -112,10 +97,7 @@ class SafetyKernel:
         # Optional callback invoked after every OverrideRecord is persisted.
         # Signature: on_record(rec: OverrideRecord) -> None
         self._on_record = on_record
-
-    # ------------------------------------------------------------------
     # Public API
-    # ------------------------------------------------------------------
 
     def determine_beneficiary(
         self,
@@ -212,10 +194,7 @@ class SafetyKernel:
         is_severity_override = override_type == "risk_severity"
         is_add_protection = override_type == "add_protection"
         going_to_none = req_lower == "none"
-
-        # ---------------------------------------------------------------
         # FAST PATHS — always ALLOW (no further checks needed)
-        # ---------------------------------------------------------------
 
         # FP-1: Non-none → non-none method switch (user controls HOW, not WHETHER)
         if (
@@ -274,10 +253,7 @@ class SafetyKernel:
                 reason="User has full autonomy over their own data.",
                 user_confirmed=user_confirmed,
             )
-
-        # ---------------------------------------------------------------
         # BLOCK RULES — hard stops, never overridable by user_confirmed
-        # ---------------------------------------------------------------
 
         # BR-5: Third-party face → method=none blocked unconditionally
         if (
@@ -372,10 +348,7 @@ class SafetyKernel:
                 reason="Cannot lower severity for unrecognised (bystander) faces.",
                 user_confirmed=user_confirmed,
             )
-
-        # ---------------------------------------------------------------
         # CHALLENGE RULES — soft guards; allowed if user_confirmed=True
-        # ---------------------------------------------------------------
 
         # CR-11: Explicit-consent face + method→none → CHALLENGE
         #        (user confirmed they want to remove their own face protection)
@@ -462,10 +435,7 @@ class SafetyKernel:
                 ),
                 user_confirmed=False,
             )
-
-        # ---------------------------------------------------------------
         # DEFAULT: allow everything else
-        # ---------------------------------------------------------------
         return self._record(
             session_id, detection_id, override_type, element_type,
             beneficiary, sev_lower, original_value, requested_value,
@@ -590,10 +560,7 @@ class SafetyKernel:
         """
         trail = self.get_audit_trail(session_id)
         return json.dumps(trail, indent=2, default=str)
-
-    # ------------------------------------------------------------------
     # Private helpers
-    # ------------------------------------------------------------------
 
     def _record(
         self,

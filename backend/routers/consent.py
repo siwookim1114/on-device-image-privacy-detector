@@ -40,11 +40,7 @@ _ALLOWED_IMAGE_TYPES: frozenset[str] = frozenset(
 
 # Maximum upload size: 10 MB
 _MAX_PHOTO_BYTES = 10 * 1024 * 1024
-
-
-# ---------------------------------------------------------------------------
 # Dependency helpers
-# ---------------------------------------------------------------------------
 
 def _get_consent_service(request: Request):
     """Extract ConsentService from app.state; raise 503 if not initialised."""
@@ -61,11 +57,7 @@ def _get_consent_service(request: Request):
             },
         )
     return svc
-
-
-# ---------------------------------------------------------------------------
 # GET /consent/persons
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/persons",
@@ -95,11 +87,7 @@ async def list_persons(
         logger.warning("get_persons returned error: %s", result["error"])
 
     return result
-
-
-# ---------------------------------------------------------------------------
 # POST /consent/persons
-# ---------------------------------------------------------------------------
 
 @router.post(
     "/persons",
@@ -241,11 +229,7 @@ async def register_person(
         )
 
     return result
-
-
-# ---------------------------------------------------------------------------
 # PUT /consent/persons/{person_id}
-# ---------------------------------------------------------------------------
 
 @router.put(
     "/persons/{person_id}",
@@ -309,11 +293,7 @@ async def update_person(
         )
 
     return result
-
-
-# ---------------------------------------------------------------------------
 # DELETE /consent/persons/{person_id}
-# ---------------------------------------------------------------------------
 
 @router.delete(
     "/persons/{person_id}",

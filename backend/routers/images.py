@@ -11,22 +11,12 @@ from backend.middleware.auth_middleware import require_auth
 router = APIRouter(prefix="/pipeline", tags=["images"])
 
 # Minimum pipeline status required before each image type is available
-_REQUIRED_STATUS: dict[str, set[str]] = {
-    "original": {"queued", "running", "paused_hitl", "completed", "failed"},
-    "protected": {"completed"},
-    "risk-map": {"completed", "paused_hitl", "running"},
-}
-
 _MIME: dict[str, str] = {
     "original": "image/jpeg",
     "protected": "image/jpeg",
     "risk-map": "image/png",
 }
-
-
-# ---------------------------------------------------------------------------
 # GET /pipeline/{session_id}/image/original
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/{session_id}/image/original",
@@ -40,11 +30,7 @@ async def serve_original(
 ) -> FileResponse:
     _assert_session_ownership(session, session_id)
     return _serve_image(request, session_id, "original")
-
-
-# ---------------------------------------------------------------------------
 # GET /pipeline/{session_id}/image/protected
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/{session_id}/image/protected",
@@ -58,11 +44,7 @@ async def serve_protected(
 ) -> FileResponse:
     _assert_session_ownership(session, session_id)
     return _serve_image(request, session_id, "protected")
-
-
-# ---------------------------------------------------------------------------
 # GET /pipeline/{session_id}/image/risk-map
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/{session_id}/image/risk-map",
@@ -76,11 +58,7 @@ async def serve_risk_map(
 ) -> FileResponse:
     _assert_session_ownership(session, session_id)
     return _serve_image(request, session_id, "risk-map")
-
-
-# ---------------------------------------------------------------------------
 # Shared image resolution helper
-# ---------------------------------------------------------------------------
 
 def _serve_image(request: Request, session_id: str, image_type: str) -> FileResponse:
     """Resolve the file path for the requested image type and return it.

@@ -24,10 +24,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-# ---------------------------------------------------------------------------
 # Project-root path injection — same pattern as consent_service.py
-# ---------------------------------------------------------------------------
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -41,10 +38,7 @@ from utils.models import (
 )
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
 # Constants
-# ---------------------------------------------------------------------------
 
 # Fields in text_settings that MUST remain True — regulatory / safety requirement.
 LOCKED_TEXT_FIELDS: tuple[str, ...] = (
@@ -54,11 +48,7 @@ LOCKED_TEXT_FIELDS: tuple[str, ...] = (
 )
 
 COLLECTION_NAME = "privacy_profiles"
-
-
-# ---------------------------------------------------------------------------
 # ProfileService
-# ---------------------------------------------------------------------------
 
 
 class ProfileService:
@@ -73,10 +63,7 @@ class ProfileService:
     def __init__(self, db: Optional[Any] = None) -> None:
         self._db = db
         self._collection = db[COLLECTION_NAME] if db is not None else None
-
-    # ------------------------------------------------------------------
     # Public API
-    # ------------------------------------------------------------------
 
     async def get_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -222,10 +209,7 @@ class ProfileService:
         """
         profile = PrivacyProfile()
         return profile.model_dump()
-
-    # ------------------------------------------------------------------
     # Validation helpers
-    # ------------------------------------------------------------------
 
     def _validate_locked_fields(self, data: Dict[str, Any]) -> None:
         """
@@ -274,10 +258,7 @@ class ProfileService:
                         f"'{method}' is not allowed in strict ethical_mode. "
                         f"Permitted methods: {sorted(strict_allowed)}"
                     )
-
-    # ------------------------------------------------------------------
     # Internal helpers
-    # ------------------------------------------------------------------
 
     def _require_db(self, operation: str) -> None:
         if self._collection is None:

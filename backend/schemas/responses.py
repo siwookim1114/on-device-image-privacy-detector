@@ -3,11 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
-
-
-# ---------------------------------------------------------------------------
 # Error envelope — used by every error response
-# ---------------------------------------------------------------------------
 
 class ErrorDetail(BaseModel):
     code: str
@@ -17,21 +13,13 @@ class ErrorDetail(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorDetail
-
-
-# ---------------------------------------------------------------------------
 # Session / Auth
-# ---------------------------------------------------------------------------
 
 class SessionResponse(BaseModel):
     session_id: str
     token: str
     expires_at: str  # ISO-8601
-
-
-# ---------------------------------------------------------------------------
 # Pipeline status
-# ---------------------------------------------------------------------------
 
 class StageProgress(BaseModel):
     step: Optional[str] = None
@@ -70,11 +58,7 @@ class PipelineStatusResponse(BaseModel):
     hitl: HitlStatus = Field(default_factory=HitlStatus)
     timing: PipelineTiming = Field(default_factory=PipelineTiming)
     error: Optional[ErrorDetail] = None
-
-
-# ---------------------------------------------------------------------------
 # Pipeline run (202 accepted)
-# ---------------------------------------------------------------------------
 
 class ImageMeta(BaseModel):
     filename: str
@@ -88,11 +72,7 @@ class PipelineRunResponse(BaseModel):
     session_id: str
     status: Literal["queued"] = "queued"
     image_meta: ImageMeta
-
-
-# ---------------------------------------------------------------------------
 # Pipeline results
-# ---------------------------------------------------------------------------
 
 class DetectionResult(BaseModel):
     detection_id: str
@@ -156,32 +136,20 @@ class PipelineResultsResponse(BaseModel):
     execution: list[ExecutionResult] = Field(default_factory=list)
     audit_trail: list[AuditEntry] = Field(default_factory=list)
     timing: PipelineTiming = Field(default_factory=PipelineTiming)
-
-
-# ---------------------------------------------------------------------------
 # Rerun
-# ---------------------------------------------------------------------------
 
 class RerunResponse(BaseModel):
     session_id: str
     status: Literal["queued"] = "queued"
     stages_to_rerun: list[str]
     stages_cached: list[str]
-
-
-# ---------------------------------------------------------------------------
 # HITL approve
-# ---------------------------------------------------------------------------
 
 class ApproveResponse(BaseModel):
     checkpoint: str
     next_stage: Optional[str]
     pipeline_resumed: bool
-
-
-# ---------------------------------------------------------------------------
 # Override
-# ---------------------------------------------------------------------------
 
 class AppliedOverride(BaseModel):
     detection_id: str
@@ -200,11 +168,7 @@ class RejectedOverride(BaseModel):
 class OverrideResponse(BaseModel):
     applied: list[AppliedOverride] = Field(default_factory=list)
     rejected: list[RejectedOverride] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
 # Chat
-# ---------------------------------------------------------------------------
 
 class ParsedIntentResponse(BaseModel):
     action: str
@@ -219,11 +183,7 @@ class ChatResponse(BaseModel):
     response_text: str
     pipeline_action_taken: Optional[str] = None
     suggestions: list[str] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
 # History
-# ---------------------------------------------------------------------------
 
 class SessionSummary(BaseModel):
     session_id: str

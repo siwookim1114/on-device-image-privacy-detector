@@ -35,6 +35,9 @@ interface HitlCheckpointPayload {
 
 interface PipelineCompletePayload {
   stage: PipelineStage;
+  total_time_ms: number;
+  protections_applied: number;
+  results_url: string;
 }
 
 export function useWebSocket(sessionId: string | null): UseWebSocketResult {

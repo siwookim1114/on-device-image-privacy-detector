@@ -18,10 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
 # Constants
-# ---------------------------------------------------------------------------
 
 SESSION_TTL_SECONDS: int = 8 * 3600  # 8 hours
 SESSION_SWEEP_INTERVAL_SECONDS: int = 15 * 60  # 15 minutes
@@ -47,10 +44,7 @@ STAGE_DEPENDENCY_MAP: Dict[str, List[str]] = {
     "execution": ["export"],
     "export":    [],
 }
-
-# ---------------------------------------------------------------------------
 # Session record
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -112,14 +106,23 @@ class SessionRecord:
     # Immutable append-only audit trail
     audit_trail: List[Dict[str, Any]] = field(default_factory=list)
 
+    # Coordinator Agent fields
+    # Conversation history for the Coordinator Agent (list of {role, content})
+    coordinator_history: List[Dict[str, Any]] = field(default_factory=list)
+    # Last classified intent action string (e.g. "process", "modify_strategy")
+    last_intent: Optional[str] = None
+    # Immutable list of PipelineSnapshot dicts written after each stage
+    coordinator_snapshots: List[Dict[str, Any]] = field(default_factory=list)
+    # Phase 1 vs Phase 2 disagreement records (DisagreementEvent dicts)
+    phase_disagreements: List[Dict[str, Any]] = field(default_factory=list)
+    # Detection coverage gaps flagged by the coordinator
+    detection_gaps: List[Dict[str, Any]] = field(default_factory=list)
+
     # Error detail (set on failure)
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     error_stage: Optional[str] = None
-
-    # -----------------------------------------------------------------------
     # Properties
-    # -----------------------------------------------------------------------
 
     @property
     def is_expired(self) -> bool:
@@ -129,11 +132,7 @@ class SessionRecord:
     @property
     def is_running(self) -> bool:
         return self.status in ("queued", "running")
-
-
-# ---------------------------------------------------------------------------
 # SessionManager
-# ---------------------------------------------------------------------------
 
 
 class SessionManager:
@@ -163,10 +162,7 @@ class SessionManager:
         self._token_index: Dict[str, str] = {}          # token → session_id
         self._lock = threading.Lock()
         self._sweep_task: Optional[asyncio.Task] = None
-
-    # -----------------------------------------------------------------------
     # Public API
-    # -----------------------------------------------------------------------
 
     def create_session(self) -> SessionRecord:
         """
@@ -297,10 +293,7 @@ class SessionManager:
 
     # Alias used in architecture doc
     sweep_expired = cleanup_expired
-
-    # -----------------------------------------------------------------------
     # Background sweep coroutine
-    # -----------------------------------------------------------------------
 
     async def sweep_loop(self) -> None:
         """

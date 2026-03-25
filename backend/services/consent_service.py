@@ -23,11 +23,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-# ------------------------------------------------------------------
 # Project-root path injection so utils.* imports resolve regardless
 # of where the FastAPI process is launched from.
-# ------------------------------------------------------------------
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
@@ -64,10 +61,7 @@ class ConsentService:
     def __init__(self) -> None:
         self._db: Optional[Any] = None   # FaceDatabase (imported lazily)
         self._connected: bool = False
-
-    # ------------------------------------------------------------------
     # Lifecycle
-    # ------------------------------------------------------------------
 
     def initialize(self, mongo_url: str = "mongodb://localhost:27017/",
                    database_name: str = "privacy_guard",
@@ -94,10 +88,7 @@ class ConsentService:
             self._connected = False
             logger.error("ConsentService: failed to connect to MongoDB: %s", exc)
             raise RuntimeError(f"ConsentService initialisation failed: {exc}") from exc
-
-    # ------------------------------------------------------------------
     # CRUD helpers
-    # ------------------------------------------------------------------
 
     async def get_persons(self, limit: int = 50, offset: int = 0) -> dict:
         """
@@ -337,10 +328,7 @@ class ConsentService:
         except Exception as exc:
             logger.error("delete_person failed for person_id=%s: %s", person_id, exc)
             return False
-
-    # ------------------------------------------------------------------
     # Private helpers
-    # ------------------------------------------------------------------
 
     def _redact_person(self, person_doc: dict) -> dict:
         """

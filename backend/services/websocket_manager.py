@@ -18,10 +18,7 @@ from typing import Dict, Set
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _iso_now() -> str:
@@ -52,11 +49,7 @@ def _build_envelope(
         "timestamp": _iso_now(),
         "payload": payload,
     }
-
-
-# ---------------------------------------------------------------------------
 # WebSocketManager
-# ---------------------------------------------------------------------------
 
 
 class WebSocketManager:
@@ -72,10 +65,7 @@ class WebSocketManager:
     def __init__(self) -> None:
         # session_id → set of active WebSocket connections
         self._connections: Dict[str, Set[WebSocket]] = {}
-
-    # -----------------------------------------------------------------------
     # Connection lifecycle
-    # -----------------------------------------------------------------------
 
     async def connect(self, session_id: str, ws: WebSocket) -> None:
         """
@@ -105,10 +95,7 @@ class WebSocketManager:
             if not conns:
                 del self._connections[session_id]
         logger.info("WS disconnected: session_id=%s", session_id)
-
-    # -----------------------------------------------------------------------
     # Broadcasting
-    # -----------------------------------------------------------------------
 
     async def broadcast(
         self,
@@ -174,10 +161,7 @@ class WebSocketManager:
             await ws.send_json(envelope)
         except Exception as exc:  # noqa: BLE001
             logger.debug("WS personal send failed (%s)", exc)
-
-    # -----------------------------------------------------------------------
     # Thread-safe broadcast (called from synchronous worker threads)
-    # -----------------------------------------------------------------------
 
     def broadcast_from_thread(
         self,
@@ -217,10 +201,7 @@ class WebSocketManager:
                 )
 
         future.add_done_callback(_log_exc)
-
-    # -----------------------------------------------------------------------
     # Introspection
-    # -----------------------------------------------------------------------
 
     def get_connection_count(self, session_id: str) -> int:
         """Return the number of active connections for a session."""

@@ -70,10 +70,7 @@ async def pipeline_stream(
             ws_manager,
         )
         return
-
-    # -----------------------------------------------------------------------
     # Token + session validation (pre-accept)
-    # -----------------------------------------------------------------------
     session = session_manager.get_by_token(token)
 
     if session is None:
@@ -93,15 +90,9 @@ async def pipeline_stream(
             session_id,
         )
         return
-
-    # -----------------------------------------------------------------------
     # Accept the handshake and register with the connection manager
-    # -----------------------------------------------------------------------
     await ws_manager.connect(session_id, websocket)
-
-    # -----------------------------------------------------------------------
     # Send initial "connected" event with current state
-    # -----------------------------------------------------------------------
     stages_completed = [
         stage
         for stage, timing_key in {
@@ -126,10 +117,7 @@ async def pipeline_stream(
             "stages_completed": stages_completed,
         },
     )
-
-    # -----------------------------------------------------------------------
     # Main receive loop — keepalive + graceful disconnect
-    # -----------------------------------------------------------------------
     try:
         while True:
             # Wait for incoming messages (client sends only ping/pong; we

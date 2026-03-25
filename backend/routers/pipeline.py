@@ -59,11 +59,7 @@ def _stages_from(from_stage: str) -> tuple[list[str], list[str]]:
     """Return (stages_to_rerun, stages_cached) given a starting stage name."""
     idx = STAGE_ORDER.index(from_stage)
     return STAGE_ORDER[idx:], STAGE_ORDER[:idx]
-
-
-# ---------------------------------------------------------------------------
 # POST /pipeline/run
-# ---------------------------------------------------------------------------
 
 @router.post(
     "/run",
@@ -201,11 +197,7 @@ async def run_pipeline(
             mime_type=detected_mime,
         ),
     )
-
-
-# ---------------------------------------------------------------------------
 # GET /pipeline/{session_id}/status
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/{session_id}/status",
@@ -273,11 +265,7 @@ async def get_pipeline_status(
         timing=timing,
         error=error_detail,
     )
-
-
-# ---------------------------------------------------------------------------
 # GET /pipeline/{session_id}/results
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/{session_id}/results",
@@ -475,11 +463,7 @@ async def get_pipeline_results(
         audit_trail=audit_out,
         timing=timing,
     )
-
-
-# ---------------------------------------------------------------------------
 # POST /pipeline/{session_id}/rerun
-# ---------------------------------------------------------------------------
 
 @router.post(
     "/{session_id}/rerun",
@@ -527,11 +511,7 @@ async def rerun_pipeline(
         stages_to_rerun=stages_to_rerun,
         stages_cached=stages_cached,
     )
-
-
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 def _assert_session_ownership(session: object, session_id: str) -> None:
     """Raise 404 if the authenticated session does not match the path param."""

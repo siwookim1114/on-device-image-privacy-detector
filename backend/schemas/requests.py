@@ -3,11 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
-
-
-# ---------------------------------------------------------------------------
 # RunConfig — sent as a JSON string in the multipart /pipeline/run upload
-# ---------------------------------------------------------------------------
 
 class PhaseFlags(BaseModel):
     """Which VLM phases should execute."""
@@ -28,11 +24,7 @@ class RunConfig(BaseModel):
     ethical_mode: Literal["strict", "balanced", "creative"] = "balanced"
     phases: PhaseFlags = Field(default_factory=PhaseFlags)
     hitl: HitlConfig = Field(default_factory=HitlConfig)
-
-
-# ---------------------------------------------------------------------------
 # RerunRequest
-# ---------------------------------------------------------------------------
 
 VALID_STAGES = frozenset({
     "detection",
@@ -57,11 +49,7 @@ class RerunRequest(BaseModel):
                 f"Unknown stage '{v}'. Valid stages: {sorted(VALID_STAGES)}"
             )
         return v
-
-
-# ---------------------------------------------------------------------------
 # Override requests
-# ---------------------------------------------------------------------------
 
 OverrideType = Literal[
     "risk_severity",
@@ -81,20 +69,13 @@ class OverrideRequest(BaseModel):
 
 class BatchOverrideRequest(BaseModel):
     overrides: list[OverrideRequest] = Field(..., max_length=50)
-
-
-# ---------------------------------------------------------------------------
 # HITL approve
-# ---------------------------------------------------------------------------
 
 class ApproveRequest(BaseModel):
     comment: Optional[str] = None
-
-
-# ---------------------------------------------------------------------------
 # Chat
-# ---------------------------------------------------------------------------
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
     context_detection_ids: Optional[list[str]] = None
+    user_confirmed: bool = False

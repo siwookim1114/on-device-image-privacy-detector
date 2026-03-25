@@ -21,11 +21,7 @@ CHECKPOINT_NEXT_STAGE: dict[str, str] = {
     "strategy_review": "sam",
     "execution_verify": "export",
 }
-
-
-# ---------------------------------------------------------------------------
 # POST /pipeline/{session_id}/approve/{checkpoint}
-# ---------------------------------------------------------------------------
 
 @router.post(
     "/{session_id}/approve/{checkpoint}",
@@ -103,11 +99,7 @@ async def approve_checkpoint(
         next_stage=next_stage,
         pipeline_resumed=resumed,
     )
-
-
-# ---------------------------------------------------------------------------
 # POST /pipeline/{session_id}/override
-# ---------------------------------------------------------------------------
 
 @router.post(
     "/{session_id}/override",
@@ -148,11 +140,7 @@ async def batch_override(
         return OverrideResponse(applied=[], rejected=rejected)
 
     return safety_kernel.apply_batch(session_id=session_id, overrides=body.overrides)
-
-
-# ---------------------------------------------------------------------------
 # POST /pipeline/{session_id}/chat
-# ---------------------------------------------------------------------------
 
 @router.post(
     "/{session_id}/chat",
@@ -176,12 +164,74 @@ async def chat(
     """
     _assert_session_ownership(session, session_id)
 
-    coordinator = getattr(request.app.state, "coordinator_agent", None)
-    if coordinator is not None:
-        return coordinator.handle(
+    coordinator_sentinel = getattr(request.app.state, "coordinator_agent", None)
+    coordinator_session_class = getattr(
+        request.app.state, "coordinator_session_class", None
+    )
+    coordinator_ctx = getattr(request.app.state, "coordinator_node_ctx", None)
+
+    if coordinator_sentinel is not None and coordinator_session_class is not None:
+        # Retrieve or create a per-session CoordinatorSession.
+        # We store it on the SessionRecord to maintain conversation state.
+        session_manager = getattr(request.app.state, "session_manager", None)
+        session_record = (
+            session_manager.get_by_id(session_id) if session_manager else None
+        )
+
+        if session_record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": {
+                        "code": "PIPELINE_NOT_FOUND",
+                        "message": f"No active session found for '{session_id}'.",
+                        "details": {"session_id": session_id},
+                    }
+                },
+            )
+
+        # Build a fresh CoordinatorSession per request (stateless across turns)
+        # OR retrieve the cached one from session_record if available.
+        # For now we instantiate fresh per call; persistent sessions are
+        # achievable by storing coordinator_session on SessionRecord.
+        coordinator = coordinator_session_class(
             session_id=session_id,
+            ctx=coordinator_ctx,
+        )
+
+        # Set image_path from session record if available
+        if hasattr(session_record, "image_path") and session_record.image_path:
+            coordinator.set_image_path(session_record.image_path)
+
+        # Restore conversation history from session record if present
+        if hasattr(session_record, "coordinator_history") and session_record.coordinator_history:
+            coordinator._state["conversation_history"] = list(
+                session_record.coordinator_history
+            )
+
+        result = await coordinator.handle_message(
             message=body.message,
-            context_detection_ids=body.context_detection_ids,
+            user_confirmed=body.user_confirmed,
+        )
+
+        # Persist conversation history back to session record
+        if session_record is not None and hasattr(session_record, "coordinator_history"):
+            session_record.coordinator_history = coordinator.get_conversation_history()
+        if session_record is not None and hasattr(session_record, "last_intent"):
+            session_record.last_intent = result["intent"].get("action")
+
+        from backend.schemas.responses import ParsedIntentResponse
+        return ChatResponse(
+            intent=ParsedIntentResponse(
+                action=result["intent"].get("action", "query"),
+                target_stage=result["intent"].get("target_stage"),
+                target_elements=result["intent"].get("target_elements", []),
+                confidence=float(result["intent"].get("confidence", 0.0)),
+                natural_language=result["intent"].get("natural_language", body.message),
+            ),
+            response_text=result.get("response_text", ""),
+            pipeline_action_taken=result.get("pipeline_action_taken"),
+            suggestions=result.get("suggestions", []),
         )
 
     # Mock response — Coordinator Agent not yet available
@@ -205,11 +255,7 @@ async def chat(
             "Use /pipeline/{session_id}/override to modify individual elements.",
         ],
     )
-
-
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 def _assert_session_ownership(session: object, session_id: str) -> None:
     if getattr(session, "session_id", None) != session_id:

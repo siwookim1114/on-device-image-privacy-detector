@@ -14,11 +14,7 @@ from fastapi.responses import JSONResponse
 from backend.config import settings
 from backend.routers import auth, consent as consent_router_module, history, hitl, images, pipeline, profile as profile_router_module
 from backend.schemas.responses import ErrorDetail, ErrorResponse
-
-
-# ---------------------------------------------------------------------------
 # Lifespan — startup / shutdown
-# ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
@@ -186,6 +182,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "ConsentService not started: %s", _consent_svc_exc
         )
 
+    # -- CoordinatorSession factory (per-session) ---------------------------
+    # The coordinator is instantiated per-session in the /chat endpoint.
+    # Here we only wire the NodeContext that is shared across all sessions.
+    # Individual CoordinatorSession objects are created in the chat handler.
+    try:
+        from agents.coordinator.nodes import NodeContext  # type: ignore[import]
+        from agents.coordinator.main import CoordinatorSession  # type: ignore[import]
+
+        _coordinator_ctx = NodeContext(
+            ws_manager=getattr(app.state, "ws_manager", None),
+            session_manager=getattr(app.state, "session_manager", None),
+            safety_kernel=getattr(app.state, "safety_kernel", None),
+            pipeline_service=getattr(app.state, "pipeline_service", None),
+            fallback_only=False,
+        )
+        # Store the NodeContext on app.state so the chat endpoint can build
+        # per-session CoordinatorSession objects with the correct services.
+        app.state.coordinator_node_ctx = _coordinator_ctx
+        # Store the CoordinatorSession class itself for easy instantiation.
+        app.state.coordinator_session_class = CoordinatorSession
+        # coordinator_agent is set to a sentinel dict so the chat endpoint
+        # can detect that the coordinator is available without a full session.
+        app.state.coordinator_agent = {"available": True}
+
+        logging.getLogger(__name__).info("Coordinator Agent context ready.")
+    except Exception as _coord_exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning(
+            "CoordinatorSession not initialised: %s", _coord_exc
+        )
+        app.state.coordinator_node_ctx = None
+        app.state.coordinator_session_class = None
+
     yield
 
     # -- Shutdown cleanup ------------------------------------------------------
@@ -193,11 +221,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if pipeline_service is not None and hasattr(pipeline_service, "shutdown"):
         # PipelineService.shutdown() is synchronous (calls executor.shutdown).
         pipeline_service.shutdown()
-
-
-# ---------------------------------------------------------------------------
 # App factory
-# ---------------------------------------------------------------------------
 
 def create_app() -> FastAPI:
     application = FastAPI(
@@ -278,11 +302,7 @@ def create_app() -> FastAPI:
     application.include_router(consent_router_module.router, prefix=api_prefix)
 
     return application
-
-
-# ---------------------------------------------------------------------------
 # Stub session manager — used when the real one is not yet available
-# ---------------------------------------------------------------------------
 
 class _StubSessionManager:
     """Minimal no-op SessionManager so routers don't crash on import."""
@@ -312,11 +332,7 @@ class _StubSessionManager:
 
     def list_all(self) -> list:
         return []
-
-
-# ---------------------------------------------------------------------------
 # Module-level app instance (used by uvicorn and import checks)
-# ---------------------------------------------------------------------------
 
 app = create_app()
 

@@ -45,10 +45,7 @@ class ProvenanceService:
         self._logs_dir.mkdir(parents=True, exist_ok=True)
         # In-memory event buffers keyed by session_id.  Cleared on finalize.
         self._buffers: Dict[str, List[dict]] = {}
-
-    # ------------------------------------------------------------------
     # Session lifecycle
-    # ------------------------------------------------------------------
 
     def open_session(
         self,
@@ -160,10 +157,7 @@ class ProvenanceService:
 
         # Release the in-memory buffer
         self._buffers.pop(session_id, None)
-
-    # ------------------------------------------------------------------
     # Event recording
-    # ------------------------------------------------------------------
 
     def record(
         self,
@@ -258,10 +252,7 @@ class ProvenanceService:
             },
             detection_id=override_record.detection_id,
         )
-
-    # ------------------------------------------------------------------
     # Query helpers
-    # ------------------------------------------------------------------
 
     def get_provenance(self, session_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -337,10 +328,7 @@ class ProvenanceService:
                 "reason": data.get("reason", ""),
             })
         return records
-
-    # ------------------------------------------------------------------
     # Internal helpers
-    # ------------------------------------------------------------------
 
     def _get_events(self, session_id: str) -> List[Dict[str, Any]]:
         """Return the event list for *session_id* from buffer or storage."""

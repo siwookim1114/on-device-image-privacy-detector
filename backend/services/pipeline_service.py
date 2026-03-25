@@ -38,18 +38,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
 # Project root on sys.path so ML imports resolve correctly.
 # backend/ lives at  <project_root>/backend/
-# ---------------------------------------------------------------------------
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-
-# ---------------------------------------------------------------------------
 # Local imports (no ML deps at module scope)
-# ---------------------------------------------------------------------------
 from services.session_manager import (  # noqa: E402
     STAGE_DEPENDENCY_MAP,
     VALID_STAGES,
@@ -57,10 +51,7 @@ from services.session_manager import (  # noqa: E402
     SessionManager,
 )
 from services.websocket_manager import WebSocketManager  # noqa: E402
-
-# ---------------------------------------------------------------------------
 # Stage metadata used for display_name / description in stage_start events
-# ---------------------------------------------------------------------------
 _STAGE_META: Dict[str, Dict[str, str]] = {
     "detection": {
         "display_name": "Detection",
@@ -99,11 +90,7 @@ _HITL_GATES: Dict[str, str] = {
     "strategy":  "strategy_review",
     "execution": "execution_verify",
 }
-
-
-# ---------------------------------------------------------------------------
 # PipelineService
-# ---------------------------------------------------------------------------
 
 
 class PipelineService:
@@ -144,10 +131,7 @@ class PipelineService:
         self._executor = ThreadPoolExecutor(
             max_workers=max_concurrent, thread_name_prefix="pipeline"
         )
-
-    # -----------------------------------------------------------------------
     # Startup / shutdown
-    # -----------------------------------------------------------------------
 
     def initialize(self, config: Optional[Dict[str, Any]] = None) -> None:
         """
@@ -195,10 +179,7 @@ class PipelineService:
                 self._orchestrator.close()
             except Exception:
                 pass
-
-    # -----------------------------------------------------------------------
     # Primary entry point: run a full pipeline
-    # -----------------------------------------------------------------------
 
     async def run_pipeline(
         self,
@@ -228,10 +209,7 @@ class PipelineService:
             loop,
             None,   # from_stage=None means run all stages
         )
-
-    # -----------------------------------------------------------------------
     # Selective re-execution
-    # -----------------------------------------------------------------------
 
     async def rerun_from(
         self,
@@ -292,10 +270,7 @@ class PipelineService:
             "stages_to_rerun": stages_to_rerun,
             "stages_cached": stages_cached,
         }
-
-    # -----------------------------------------------------------------------
     # HITL approval — called from the REST /approve endpoint
-    # -----------------------------------------------------------------------
 
     def approve_checkpoint(
         self,
@@ -329,10 +304,7 @@ class PipelineService:
             session.session_id,
             checkpoint,
         )
-
-    # -----------------------------------------------------------------------
     # Provenance helper (fire-and-forget; never raises)
-    # -----------------------------------------------------------------------
 
     def _prov(
         self,
@@ -349,10 +321,7 @@ class PipelineService:
             self._provenance.record(session_id, event_type, phase, data, detection_id)
         except Exception as exc:
             logger.debug("Provenance record skipped: %s", exc)
-
-    # -----------------------------------------------------------------------
     # Synchronous execution (runs in worker thread)
-    # -----------------------------------------------------------------------
 
     def _execute_sync(
         self,
@@ -460,10 +429,7 @@ class PipelineService:
                 run_stages = VALID_STAGES[idx:]
             else:
                 run_stages = VALID_STAGES[:]
-
-            # ----------------------------------------------------------------
             # Stage: detection
-            # ----------------------------------------------------------------
             if "detection" in run_stages:
                 stage = "detection"
                 meta = _STAGE_META[stage]
@@ -530,10 +496,7 @@ class PipelineService:
                         annotated_image = _PIL_Image.open(image_path)
                     except Exception:
                         pass
-
-            # ----------------------------------------------------------------
             # Stage: risk
-            # ----------------------------------------------------------------
             if "risk" in run_stages:
                 stage = "risk"
                 meta = _STAGE_META[stage]
@@ -615,10 +578,7 @@ class PipelineService:
                         return
             else:
                 risk_result = session.risk_result
-
-            # ----------------------------------------------------------------
             # Stage: consent
-            # ----------------------------------------------------------------
             if "consent" in run_stages:
                 stage = "consent"
                 meta = _STAGE_META[stage]
@@ -684,10 +644,7 @@ class PipelineService:
                             "status": "skipped",
                             "reason": str(exc),
                         })
-
-            # ----------------------------------------------------------------
             # Stage: strategy
-            # ----------------------------------------------------------------
             if "strategy" in run_stages:
                 stage = "strategy"
                 meta = _STAGE_META[stage]
@@ -749,10 +706,7 @@ class PipelineService:
                         return
             else:
                 strategy_result = session.strategy_result
-
-            # ----------------------------------------------------------------
             # Stage: sam
-            # ----------------------------------------------------------------
             if "sam" in run_stages:
                 stage = "sam"
                 meta = _STAGE_META[stage]
@@ -835,10 +789,7 @@ class PipelineService:
                             "skipped": True,
                             "reason": str(exc),
                         })
-
-            # ----------------------------------------------------------------
             # Stage: execution
-            # ----------------------------------------------------------------
             if "execution" in run_stages:
                 stage = "execution"
                 meta = _STAGE_META[stage]
@@ -909,10 +860,7 @@ class PipelineService:
                         return
             else:
                 execution_report = session.execution_report
-
-            # ----------------------------------------------------------------
             # Stage: export
-            # ----------------------------------------------------------------
             if "export" in run_stages:
                 stage = "export"
                 meta = _STAGE_META[stage]
@@ -985,10 +933,7 @@ class PipelineService:
                             "files_written": 0,
                             "reason": str(exc),
                         })
-
-            # ----------------------------------------------------------------
             # Pipeline complete
-            # ----------------------------------------------------------------
             total_ms = elapsed_ms(pipeline_start)
             session.stage_timings["total_ms"] = total_ms
             session.status = "completed"
@@ -1001,6 +946,7 @@ class PipelineService:
 
             results_url = f"/api/v1/pipeline/{session.session_id}/results"
             emit("pipeline_complete", {
+                "stage": "done",
                 "total_time_ms": total_ms,
                 "protections_applied": protections_applied,
                 "results_url": results_url,
@@ -1045,10 +991,7 @@ class PipelineService:
                 "recoverable": False,
                 "suggestion": "Check server logs for details.",
             })
-
-    # -----------------------------------------------------------------------
     # HITL helpers
-    # -----------------------------------------------------------------------
 
     def _should_pause_hitl(
         self, session: SessionRecord, stage: str
@@ -1186,10 +1129,7 @@ class PipelineService:
             "resolved_by": "user_approval",
             "next_stage": session.current_stage,
         })
-
-    # -----------------------------------------------------------------------
     # Error handling
-    # -----------------------------------------------------------------------
 
     def _handle_stage_error(
         self,
@@ -1217,10 +1157,7 @@ class PipelineService:
             "suggestion": "Check server logs. You may rerun from an earlier stage.",
         })
         raise PipelineServiceError(stage, exc)
-
-    # -----------------------------------------------------------------------
     # Results accessor
-    # -----------------------------------------------------------------------
 
     def get_results(self, session: SessionRecord) -> Dict[str, Any]:
         """
@@ -1244,11 +1181,7 @@ class PipelineService:
             "audit_trail": session.audit_trail,
             "stage_timings": session.stage_timings,
         }
-
-
-# ---------------------------------------------------------------------------
 # Service-level exceptions
-# ---------------------------------------------------------------------------
 
 
 class PipelineServiceError(Exception):

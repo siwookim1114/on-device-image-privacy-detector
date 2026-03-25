@@ -60,11 +60,7 @@ _ALLOWED_IMAGE_TYPES: frozenset[str] = frozenset(
 
 # Maximum face photo upload size: 10 MB
 _MAX_FACE_PHOTO_BYTES = 10 * 1024 * 1024
-
-
-# ---------------------------------------------------------------------------
 # Dependency helpers
-# ---------------------------------------------------------------------------
 
 def _get_profile_service(request: Request):
     """Extract ProfileService from app.state; raise 503 if not initialised."""
@@ -178,11 +174,7 @@ def _profile_doc_to_response(doc: Dict[str, Any]) -> ProfileResponse:
         created_at=_dt_str(doc.get("created_at")),
         updated_at=_dt_str(doc.get("updated_at")),
     )
-
-
-# ---------------------------------------------------------------------------
 # GET /profile
-# ---------------------------------------------------------------------------
 
 @router.get(
     "",
@@ -221,11 +213,7 @@ async def get_profile(
         )
 
     return _profile_doc_to_response(doc)
-
-
-# ---------------------------------------------------------------------------
 # POST /profile
-# ---------------------------------------------------------------------------
 
 @router.post(
     "",
@@ -279,11 +267,7 @@ async def create_profile(
         user_id=user_id,
         onboarding_complete=data.onboarding_complete,
     )
-
-
-# ---------------------------------------------------------------------------
 # PUT /profile
-# ---------------------------------------------------------------------------
 
 @router.put(
     "",
@@ -334,11 +318,7 @@ async def update_profile(
         user_id=user_id,
         updated_fields=updated_fields,
     )
-
-
-# ---------------------------------------------------------------------------
 # DELETE /profile
-# ---------------------------------------------------------------------------
 
 @router.delete(
     "",
@@ -374,11 +354,7 @@ async def delete_profile(
         )
 
     return ProfileDeletedResponse(user_id=user_id)
-
-
-# ---------------------------------------------------------------------------
 # GET /profile/questionnaire
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/questionnaire",
@@ -424,11 +400,7 @@ async def get_questionnaire() -> QuestionnaireResponse:
                 }
             },
         )
-
-
-# ---------------------------------------------------------------------------
 # POST /profile/enroll-face
-# ---------------------------------------------------------------------------
 
 @router.post(
     "/enroll-face",

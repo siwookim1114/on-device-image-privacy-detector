@@ -13,11 +13,7 @@ from backend.schemas.responses import HistoryResponse, SessionSummary
 router = APIRouter(prefix="/history", tags=["history"])
 
 ArtifactType = Literal["protected", "risk_json", "provenance"]
-
-
-# ---------------------------------------------------------------------------
 # GET /history
-# ---------------------------------------------------------------------------
 
 @router.get(
     "",
@@ -95,11 +91,7 @@ async def list_history(
         page_size=page_size,
         has_next=end < total,
     )
-
-
-# ---------------------------------------------------------------------------
 # GET /history/{session_id}/download
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/{session_id}/download",
@@ -158,11 +150,7 @@ async def download_artifact(
         media_type=mime_type,
         filename=os.path.basename(path),
     )
-
-
-# ---------------------------------------------------------------------------
 # GET /history/{session_id}/audit
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/{session_id}/audit",
@@ -198,11 +186,7 @@ async def export_audit(
         media_type="application/json",
         filename=f"{session_id}_audit_trail.json",
     )
-
-
-# ---------------------------------------------------------------------------
 # GET /history/{session_id}/provenance
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/{session_id}/provenance",
