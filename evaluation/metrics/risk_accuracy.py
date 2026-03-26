@@ -1,6 +1,6 @@
 """Risk severity accuracy metrics."""
 from typing import Dict
-from evaluation.metrics.detection import compute_iou
+from evaluation.metrics.detection import compute_iou, _normalize_pred_type
 
 SEVERITY_LEVELS = ["critical", "high", "medium", "low"]
 
@@ -21,7 +21,7 @@ def compute_severity_accuracy(
         best_iou = 0.0
         best_pred_sev = None
         for pred in predictions:
-            pred_type = pred.element_type if hasattr(pred, "element_type") else pred.get("element_type", "")
+            pred_type = _normalize_pred_type(pred)
             if pred_type != gt_type:
                 continue
             pred_bbox = _get_pred_bbox(pred)

@@ -37,14 +37,23 @@ def compute_face_reid_rate(
                 orig_emb = facenet(orig_tensor)
                 prot_emb = facenet(prot_tensor)
 
+            # Measure if original face is actually detectable (embedding has meaningful signal)
+            orig_norm = torch.norm(orig_emb).item()
+            original_detectable = orig_norm > 0.1  # FaceNet produces near-zero norm for non-face inputs
+
             similarity = torch.nn.functional.cosine_similarity(orig_emb, prot_emb).item()
-            results.append({"bbox": bbox, "similarity": similarity, "reidentified": similarity > similarity_threshold})
+            results.append({
+                "bbox": bbox,
+                "similarity": similarity,
+                "reidentified": similarity > similarity_threshold,
+                "original_detectable": original_detectable,
+                "original_embedding_norm": round(orig_norm, 4),
+            })
         except Exception:
-            results.append({"bbox": bbox, "similarity": 0.0, "reidentified": False})
+            results.append({"bbox": bbox, "similarity": 0.0, "reidentified": False, "original_detectable": False})
 
     n = len(results)
-    # Measure before_rate empirically: how many original faces are detectable by FaceNet
-    before_identifiable = sum(1 for r in results if r.get("original_detectable", True))
+    before_identifiable = sum(1 for r in results if r.get("original_detectable", False))
     before_rate = before_identifiable / max(n, 1)
     after_rate = sum(1 for r in results if r["reidentified"]) / max(n, 1)
     reduction = 1.0 - (after_rate / max(before_rate, 1e-9))
@@ -140,24 +149,29 @@ def compute_protection_decision_accuracy(pipeline_output, ground_truth_elements)
         should = gt.should_protect if hasattr(gt, "should_protect") else gt.get("should_protect", False)
 
         matched = False
+        best_iou = 0.0
+        best_assess = None
         if pipeline_output and pipeline_output.risk_analysis:
             for assess in pipeline_output.risk_analysis.risk_assessments:
                 pred_bbox = assess.bbox
                 if hasattr(pred_bbox, "x"):
                     pred_bbox = [pred_bbox.x, pred_bbox.y, pred_bbox.width, pred_bbox.height]
                 iou = compute_iou(list(gt_bbox), list(pred_bbox))
-                if iou >= 0.5:
-                    protected = assess.requires_protection if hasattr(assess, "requires_protection") else True
-                    if should and protected:
-                        tp += 1
-                    elif should and not protected:
-                        fn += 1
-                    elif not should and protected:
-                        fp += 1
-                    else:
-                        tn += 1
-                    matched = True
-                    break
+                if iou >= 0.5 and iou > best_iou:
+                    best_iou = iou
+                    best_assess = assess
+
+            if best_assess is not None:
+                protected = best_assess.requires_protection if hasattr(best_assess, "requires_protection") else True
+                if should and protected:
+                    tp += 1
+                elif should and not protected:
+                    fn += 1
+                elif not should and protected:
+                    fp += 1
+                else:
+                    tn += 1
+                matched = True
 
         if not matched and should:
             fn += 1

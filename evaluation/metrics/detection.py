@@ -17,6 +17,50 @@ def compute_iou(bbox1: list, bbox2: list) -> float:
     return inter / max(union, 1e-9)
 
 
+def _normalize_pred_type(pred) -> str:
+    """Normalize pipeline element_type: object with screen indicators -> screen.
+
+    The pipeline always uses element_type="object" for YOLO detections (including
+    laptops, TVs, monitors).  Ground truth uses "screen" for screen devices and
+    "object" for non-screen peripherals (mouse, keyboard).
+
+    We reclassify a prediction as "screen" when ANY of these hold:
+      1. screen_state is set (Phase 1.5a VLM ran successfully)
+      2. element_description contains a screen-device keyword
+      3. screen_bbox is set (risk tool identified a screen region)
+    """
+    etype = pred.element_type if hasattr(pred, "element_type") else pred.get("element_type", "")
+    if etype != "object":
+        return etype
+
+    # Check 1: screen_state field (set by Phase 1.5a VLM verification)
+    screen_state = getattr(pred, "screen_state", None)
+    if screen_state is None and hasattr(pred, "get"):
+        screen_state = pred.get("screen_state")
+    if screen_state is not None:
+        return "screen"
+
+    # Check 2: screen_bbox field (set by risk assessment for screen devices)
+    screen_bbox = getattr(pred, "screen_bbox", None)
+    if screen_bbox is None and hasattr(pred, "get"):
+        screen_bbox = pred.get("screen_bbox")
+    if screen_bbox is not None:
+        return "screen"
+
+    # Check 3: element_description contains screen-device keywords
+    desc = getattr(pred, "element_description", None)
+    if desc is None and hasattr(pred, "get"):
+        desc = pred.get("element_description", "")
+    if desc:
+        desc_lower = desc.lower()
+        _SCREEN_KEYWORDS = ("laptop", "tv", "monitor", "television", "cell phone",
+                            "tablet", "ipad", "screen")
+        if any(kw in desc_lower for kw in _SCREEN_KEYWORDS):
+            return "screen"
+
+    return etype
+
+
 def compute_detection_metrics(
     predictions: list,
     ground_truth: list,
@@ -29,15 +73,14 @@ def compute_detection_metrics(
         etype = gt.element_type if hasattr(gt, "element_type") else gt.get("element_type", "")
         element_types.add(etype)
     for pred in predictions:
-        etype = pred.element_type if hasattr(pred, "element_type") else pred.get("element_type", "")
+        etype = _normalize_pred_type(pred)
         element_types.add(etype)
 
     results = {}
     for etype in element_types:
         gt_items = [g for g in ground_truth
                     if (g.element_type if hasattr(g, "element_type") else g.get("element_type")) == etype]
-        pred_items = [p for p in predictions
-                      if (p.element_type if hasattr(p, "element_type") else p.get("element_type")) == etype]
+        pred_items = [p for p in predictions if _normalize_pred_type(p) == etype]
 
         gt_bboxes = [g.bbox if hasattr(g, "bbox") else g.get("bbox", [0, 0, 0, 0]) for g in gt_items]
         pred_bboxes = [_get_bbox(p) for p in pred_items]
@@ -69,12 +112,25 @@ def compute_detection_metrics(
     all_fn = sum(m.false_negatives for m in results.values())
     results["micro_avg"] = DetectionMetrics(element_type="micro_avg", true_positives=all_tp, false_positives=all_fp, false_negatives=all_fn)
 
-    # Macro-average (average per-type F1 scores)
-    type_f1s = [m.f1 for m in results.values() if m.element_type not in ("micro_avg", "macro_avg")]
-    macro_f1 = sum(type_f1s) / max(len(type_f1s), 1)
-    macro_p = sum(m.precision for m in results.values() if m.element_type not in ("micro_avg", "macro_avg")) / max(len(type_f1s), 1)
-    macro_r = sum(m.recall for m in results.values() if m.element_type not in ("micro_avg", "macro_avg")) / max(len(type_f1s), 1)
-    results["macro_avg"] = DetectionMetrics(element_type="macro_avg", true_positives=all_tp, false_positives=all_fp, false_negatives=all_fn)
+    # Macro-average: average of per-type P/R, then compute F1 from those
+    # We synthesize TP/FP/FN that produce the correct macro P/R/F1
+    type_metrics = [m for m in results.values() if m.element_type not in ("micro_avg", "macro_avg")]
+    n_types = max(len(type_metrics), 1)
+    macro_p = sum(m.precision for m in type_metrics) / n_types
+    macro_r = sum(m.recall for m in type_metrics) / n_types
+    macro_f1 = (2 * macro_p * macro_r) / max(macro_p + macro_r, 1e-9)
+    # Store as a special DetectionMetrics with synthetic counts that produce correct P/R
+    # Use scale=10000 to maintain precision
+    scale = 10000
+    synth_tp = int(macro_p * macro_r * scale)
+    synth_fp = int(macro_r * scale) - synth_tp if macro_p > 0 else 0
+    synth_fn = int(macro_p * scale) - synth_tp if macro_r > 0 else 0
+    results["macro_avg"] = DetectionMetrics(
+        element_type="macro_avg",
+        true_positives=max(synth_tp, 0),
+        false_positives=max(synth_fp, 0),
+        false_negatives=max(synth_fn, 0),
+    )
 
     return results
 
