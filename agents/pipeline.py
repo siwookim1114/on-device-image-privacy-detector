@@ -500,6 +500,7 @@ class PipelineOrchestrator:
             # Attach extra metadata as a provenance placeholder; a full
             # ProvenanceLog is not produced here (would require hashing etc.)
             provenance_log=None,
+            phase_timings=phase_timings,
         )
 
     # Convenience helpers                                                      

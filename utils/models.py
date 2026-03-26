@@ -561,6 +561,7 @@ class PipelineOutput(BaseModel):
     execution_report: Optional[ExecutionReport] = None
     total_time_ms: float = 0.0
     error_message: Optional[str] = None
+    phase_timings: Dict[str, float] = Field(default_factory=dict)
 
 # Input Schemas for Phase 2 tools
 class ReclassifyAssessmentInput(BaseModel):
