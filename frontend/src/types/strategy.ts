@@ -1,6 +1,5 @@
 import type { RiskLevel } from './risk';
-
-export type ObfuscationMethod = 'blur' | 'pixelate' | 'solid_overlay' | 'inpaint' | 'avatar_replace' | 'generative_replace' | 'none';
+export type ObfuscationMethod = 'blur' | 'pixelate' | 'solid_overlay' | 'silhouette' | 'inpaint' | 'avatar_replace' | 'generative_replace' | 'none';
 
 export interface ProtectionStrategy {
   detection_id: string;

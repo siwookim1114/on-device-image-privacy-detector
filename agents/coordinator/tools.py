@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # Canonical value sets (mirrors CLAUDE.md)
 
 VALID_METHODS = frozenset({
-    "blur", "pixelate", "solid_overlay", "inpaint",
+    "blur", "pixelate", "solid_overlay", "silhouette", "inpaint",
     "avatar_replace", "generative_replace", "none",
 })
 

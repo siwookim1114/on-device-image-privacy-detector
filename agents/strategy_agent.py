@@ -189,13 +189,15 @@ class StrategyAgent:
         if consent == "unclear":
             return "blur", {"kernel_size": 25}, "Unclear consent — default blur protection"
 
-        # Bystander (consent=none or null)
-        if severity in ("low", "medium"):
-            return "blur", {"kernel_size": 25}, "Bystander face — blur protection"
+        # Bystander (consent=none or null) — severity-dependent method selection
+        if severity == "low":
+            return "blur", {"kernel_size": 21}, "Bystander face, low risk — light blur"
+        elif severity == "medium":
+            return "pixelate", {"block_size": 12}, "Bystander face, medium risk — pixelation"
         elif severity == "high":
-            return "blur", {"kernel_size": 35}, "Bystander face, high risk — strong blur"
+            return "silhouette", {}, "Bystander face, high risk — silhouette replacement"
         else:  # critical
-            return "pixelate", {"block_size": 16}, "Bystander face, critical — mandatory pixelation"
+            return "avatar_replace", {}, "Bystander face, critical risk — avatar replacement"
 
     def _default_for_text(self, a: RiskAssessment, severity: str) -> Tuple[str, Dict, str]:
         """Rule-based default for text elements."""
@@ -319,7 +321,7 @@ class StrategyAgent:
             "- ALWAYS trust the consent status from the data (consent=none, consent=explicit, etc.) — "
             "it was determined by a face-matching agent using a registered consent database. "
             "Do NOT override consent based on visual appearance.\n"
-            "- consent=none (bystander): blur or pixelate — NEVER set to 'none'\n"
+            "- consent=none (bystander): blur, pixelate, silhouette, or avatar_replace — NEVER set to 'none'\n"
             "- consent=explicit (user): should always be 'none'\n"
             "- Your role for faces: verify the obfuscation METHOD is appropriate (blur vs pixelate vs solid_overlay) "
             "based on face size and visibility — not re-judge identity or consent.\n\n"

@@ -19,6 +19,7 @@ from utils.models import (
     DetectionResults,
     StrategyRecommendations,
 )
+from utils.avatar import apply_avatar_bbox, apply_avatar_mask, apply_silhouette_bbox, apply_silhouette_mask
 
 
 def export_risk_results_json(
@@ -435,6 +436,12 @@ def _apply_obfuscation_bbox(
         elif isinstance(color, str):
             color = (0, 0, 0)
         region = Image.new("RGB", (x2 - x1, y2 - y1), color)
+    elif method == ObfuscationMethod.AVATAR_REPLACE:
+        apply_avatar_bbox(image, x1, y1, x2, y2, params)
+        return
+    elif method == ObfuscationMethod.SILHOUETTE:
+        apply_silhouette_bbox(image, x1, y1, x2, y2, params)
+        return
 
     image.paste(region, (x1, y1))
 
@@ -461,5 +468,12 @@ def _apply_obfuscation_mask(
         if color == "black" or isinstance(color, str):
             color = [0, 0, 0]
         img_np[mask > 0] = color
+    elif method == ObfuscationMethod.AVATAR_REPLACE:
+        ys, xs = np.where(mask > 0)
+        if len(ys) > 0:
+            bbox = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
+            img_np = apply_avatar_mask(img_np, mask, bbox, params)
+    elif method == ObfuscationMethod.SILHOUETTE:
+        img_np = apply_silhouette_mask(img_np, mask, params)
 
     image.paste(Image.fromarray(img_np))

@@ -43,6 +43,7 @@ class ObfuscationMethod(str, Enum):
     BLUR = "blur"
     PIXELATE = "pixelate"
     SOLID_OVERLAY = "solid_overlay"
+    SILHOUETTE = "silhouette"
     INPAINT = "inpaint"
     AVATAR_REPLACE = "avatar_replace"
     GENERATIVE_REPLACE = "generative_replace"
@@ -155,14 +156,10 @@ class PrivacyProfile(BaseModel):
     # Default preferences (preserved)
     default_mode: str = "hybrid"     # manual, hybrid, auto
     ethical_mode: str = "balanced"   # strict, balanced, creative
-
-    # ---- Identity block -------------------------------------------------------
     display_name: Optional[str] = None
     self_person_id: Optional[str] = None
     face_enrollment_count: int = 0
     known_contacts: List[ContactEntry] = Field(default_factory=list)
-
-    # ---- Structured sensitivity (replaces loose dicts for new code) -----------
     face_settings: FaceSensitivitySettings = Field(
         default_factory=FaceSensitivitySettings
     )
@@ -175,25 +172,17 @@ class PrivacyProfile(BaseModel):
     object_settings: ObjectSensitivitySettings = Field(
         default_factory=ObjectSensitivitySettings
     )
-
-    # ---- Preferred obfuscation methods per element type ----------------------
     preferred_face_method: str = "blur"
     preferred_text_method: str = "solid_overlay"
     preferred_screen_method: str = "blur"
     preferred_object_method: str = "blur"
-
-    # ---- HITL preferences ----------------------------------------------------
     auto_advance_threshold: str = "medium"   # never, low, medium, high
     pause_on_critical: bool = True
     pause_on_new_faces: bool = True
     require_confirm_on_bystander_unprotect: bool = True
-
-    # ---- Custom risk threshold overrides -------------------------------------
     # Keys: "face_bystander", "face_known", "face_self", "text_ssn", etc.
     # Values: RiskLevel string (critical / high / medium / low)
     threshold_overrides: Dict[str, str] = Field(default_factory=dict)
-
-    # ---- Meta ----------------------------------------------------------------
     onboarding_complete: bool = False
     profile_version: int = 1
 

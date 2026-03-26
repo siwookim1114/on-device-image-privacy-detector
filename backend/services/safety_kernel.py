@@ -42,6 +42,7 @@ METHOD_STRENGTH: Dict[str, int] = {
     "none": 0,
     "blur": 1,
     "pixelate": 2,
+    "silhouette": 3,
     "avatar_replace": 3,
     "inpaint": 3,
     "solid_overlay": 4,
