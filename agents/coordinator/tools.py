@@ -31,8 +31,6 @@ VALID_METHODS = frozenset({
     "avatar_replace", "generative_replace", "none",
 })
 
-VALID_SEVERITIES = frozenset({"critical", "high", "medium", "low"})
-
 # Text types that carry a legal/regulatory protection requirement (GDPR,
 # PCI-DSS, HIPAA etc.) and must never have their protection removed.
 _LEGAL_TEXT_TYPES = frozenset({"ssn", "credit_card", "password", "personal_number"})
@@ -58,19 +56,6 @@ def _compute_legal_requirement(
     return False
 
 
-def _resolve_element(
-    pipeline_state: Dict,
-    detection_id: str,
-) -> Tuple[Optional[Dict], Optional[Dict]]:
-    """
-    Convenience wrapper that returns (assessment, strategy) for a detection_id.
-
-    Either component may be None if the corresponding pipeline stage has not
-    completed yet.
-    """
-    assessment = _find_assessment(pipeline_state, detection_id)
-    strategy = _find_strategy(pipeline_state, detection_id)
-    return assessment, strategy
 # Helpers — extract element context from pipeline state
 
 def _find_assessment(pipeline_state: Dict, detection_id: str) -> Optional[Dict]:

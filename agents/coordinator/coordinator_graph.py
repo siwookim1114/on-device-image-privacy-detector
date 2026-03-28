@@ -88,7 +88,6 @@ except ImportError:  # pragma: no cover
 from agents.coordinator.state import (
     CoordinatorState,
     InnerPipelineState,
-    DisagreementEvent,
     PipelineSnapshot,
     STAGE_ORDER,
 )
@@ -112,12 +111,6 @@ from agents.coordinator.reexecution_graph import (
     ReExecutionPlan,
     PipelineStage,
     compute_reexecution_plan,
-    intent_to_modification_type,
-)
-from agents.coordinator.coordinator_prompts import (
-    build_explain_prompt,
-    build_summary_prompt,
-    parse_summary_response,
 )
 
 # Stage timeout in seconds (per-stage ceiling)
