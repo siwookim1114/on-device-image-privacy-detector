@@ -1,8 +1,11 @@
 """
-Intent Classifier — Hybrid Regex + VLM two-level system.
+Intent Classifier — Hybrid LLM-first + Regex system.
 
-Level 1: Regex fast-path (0ms, handles ~80% of queries at confidence=1.0).
-Level 2: VLM classification (≤1s, handles ambiguous/complex queries).
+Level 0: Regex fast-path for trivial 1-2 word commands (0ms).
+Level 1: LLM structured classification (PRIMARY for multi-word, ~50ms).
+Level 2: Regex fallback when LLM unavailable.
+Level 3: VLM server fallback (≤1s).
+Level 4: Safe default (QUERY, confidence=0.3).
 
 Each public function is independently testable with no external dependencies
 so that regression tests can run without llama-server.
@@ -10,10 +13,18 @@ so that regression tests can run without llama-server.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+
+from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from agents.text_llm import TextLLM
+
+logger = logging.getLogger(__name__)
 # Enumerations (mirrors COORDINATOR_BLUEPRINT.md Section 4)
 
 class IntentAction(str, Enum):
@@ -41,6 +52,187 @@ class ParsedIntent:
     requires_safety_check: bool              # True if modifying THIRD_PARTY or CRITICAL
     requires_checkpoint: bool                # True if confidence < 0.8 or involves override
     multi_intents: List["ParsedIntent"] = field(default_factory=list)  # decomposed intents
+
+
+# ── IntentClassification Pydantic model (for TextLLM structured output) ────
+class IntentClassification(BaseModel):
+    """
+    Pydantic model for structured LLM intent classification output.
+
+    Used with TextLLM.call_structured() to get schema-constrained JSON
+    from the in-process small LLM. Fields mirror ParsedIntent but use
+    Pydantic types for validation and JSON schema generation.
+    """
+    action: str = Field(
+        ...,
+        description="One of: process, modify_strategy, ignore, strengthen, query, undo, approve, reject",
+    )
+    target_stage: str = Field(
+        default="",
+        description="Pipeline stage: detect, risk, strategy, execution, or empty",
+    )
+    target_element_types: Optional[List[str]] = Field(
+        default=None,
+        description="Element types: face, text, screen, object, or null for all",
+    )
+    method_specified: Optional[str] = Field(
+        default=None,
+        description="Obfuscation method: blur, pixelate, solid_overlay, avatar_replace, inpaint, or null",
+    )
+    strength_parameter: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Obfuscation strength 0.0-1.0, or null",
+    )
+    extracted_constraints: Dict = Field(
+        default_factory=dict,
+        description="Additional constraints extracted from the query",
+    )
+    requires_safety_check: bool = Field(
+        default=False,
+        description="True if action modifies THIRD_PARTY or CRITICAL elements",
+    )
+    confidence: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Classification confidence 0.0-1.0",
+    )
+    reasoning: str = Field(
+        default="",
+        description="One-sentence reasoning for debugging",
+    )
+
+    def to_parsed_intent(self, original_query: str) -> "ParsedIntent":
+        """
+        Convert this structured LLM output into a ParsedIntent dataclass.
+
+        Handles invalid action strings gracefully by falling back to QUERY.
+        Sets requires_checkpoint based on confidence threshold.
+
+        Confidence boosting: Small models often omit the confidence field,
+        causing it to default to 0.5. When the LLM explicitly chose a
+        non-query action, we boost confidence to 0.85 (the model made a
+        deliberate classification choice). This prevents the clarification
+        gate from blocking valid LLM classifications.
+        """
+        try:
+            action = IntentAction(self.action.lower())
+        except ValueError:
+            action = IntentAction.QUERY
+
+        confidence = max(0.0, min(1.0, self.confidence))
+
+        # Boost default confidence for non-query LLM classifications
+        # The model chose this action deliberately — trust it
+        if confidence == 0.5 and action != IntentAction.QUERY:
+            confidence = 0.85
+
+        # Extract element types from query if LLM didn't provide them
+        target_types = self.target_element_types
+        if not target_types:
+            target_types = _extract_element_types(original_query)
+
+        # Extract method from query if LLM didn't provide it, and normalize
+        # LLM aliases (e.g. "avatar" → "avatar_replace", "black box" → "solid_overlay")
+        method = self.method_specified
+        if method:
+            method = _normalize_method(method) or method
+        if not method:
+            method = _extract_method(original_query)
+
+        # Extract current_method constraint if LLM didn't provide it
+        # Detects when user references a current method ("black box", "blurred", "avatar")
+        constraints = dict(self.extracted_constraints)
+        if "current_method" not in constraints:
+            current = _extract_current_method(original_query)
+            if current:
+                constraints["current_method"] = current
+
+        return ParsedIntent(
+            action=action,
+            target_stage=self.target_stage or "",
+            target_elements=None,
+            target_element_types=target_types,
+            confidence=confidence,
+            method_specified=method,
+            strength_parameter=self.strength_parameter,
+            natural_language=original_query,
+            extracted_constraints=constraints,
+            requires_safety_check=self.requires_safety_check,
+            requires_checkpoint=(confidence < 0.8),
+        )
+
+
+# ── LLM intent prompt builder (for TextLLM) ───────────────────────────────
+
+_LLM_INTENT_SYSTEM_PROMPT = """\
+Classify user commands for image privacy. Return JSON with ALL fields filled.
+
+action: process | modify_strategy | ignore | strengthen | query | undo | approve | reject
+target_element_types: REQUIRED array - ["face"], ["text"], ["screen"], ["object"]. "values"/"sensitive"/"black box"/"numbers" = ["text"]. "person"/"people" = ["face"]. "laptop"/"monitor"/"computer" = ["screen"]. null ONLY for query/approve/reject/undo.
+method_specified: blur | pixelate | solid_overlay | avatar_replace | inpaint | none | null. "black box" = solid_overlay. "avatar"/"cartoon" = avatar_replace. For "from X to Y" or "X instead of Y", method = Y (the NEW one).
+confidence: 0.85-1.0 for clear commands, 0.6-0.8 for ambiguous
+
+Rules:
+- "No, ..." followed by instructions = refinement (modify_strategy), NOT reject. Only "no"/"nope"/"reject" alone = reject.
+- "from X to Y" or "instead of X" -> method_specified = the NEW target method, not the old one.
+- When user references a CURRENT protection ("black box"/"blurred"/"avatar face"), set extracted_constraints.current_method to the method name (solid_overlay/blur/avatar_replace). This filters to only elements using that method.
+- "it"/"them"/"those" refer to elements from the last action. Check "Last action" in context.
+- "back"/"revert"/"change back" = modify_strategy. method_specified should be the PREVIOUS method. Set extracted_constraints.current_method to the current method.
+
+Examples:
+Q: "blur the face" -> {"action":"modify_strategy","target_element_types":["face"],"method_specified":"blur","confidence":0.95}
+Q: "change black boxes to blur" -> {"action":"modify_strategy","target_element_types":["text"],"method_specified":"blur","extracted_constraints":{"current_method":"solid_overlay"},"confidence":0.9}
+Q: "remove laptop protection" -> {"action":"ignore","target_element_types":["screen"],"method_specified":null,"confidence":0.9}
+Q: "what risks were found?" -> {"action":"query","target_element_types":null,"method_specified":null,"confidence":0.9}
+Q: "change face from avatar to blur" -> {"action":"modify_strategy","target_element_types":["face"],"method_specified":"blur","confidence":0.95}
+Q: "no, only apply to the actual values not labels" -> {"action":"modify_strategy","target_element_types":["text"],"method_specified":null,"confidence":0.85}
+Q: "pixelate all text" -> {"action":"modify_strategy","target_element_types":["text"],"method_specified":"pixelate","confidence":0.95}
+Q: (Last action: Changed 4 text from solid_overlay to blur) "change it back to black box" -> {"action":"modify_strategy","target_element_types":["text"],"method_specified":"solid_overlay","extracted_constraints":{"current_method":"blur"},"confidence":0.95}"""
+
+_LLM_INTENT_USER_TEMPLATE = """\
+Pipeline context:
+  stage: {current_stage} | elements: {element_count} | critical: {has_critical} | pending_hitl: {pending_hitl}
+
+Recent conversation:
+{conversation_tail}
+
+Last action: {last_action_summary}
+
+User message: "{user_query}"
+"""
+
+
+def build_intent_llm_prompt(
+    user_query: str,
+    current_stage: str = "unknown",
+    element_count: int = 0,
+    has_critical: bool = False,
+    pending_hitl: bool = False,
+    recent_actions: Optional[List[str]] = None,
+    conversation_tail: str = "",
+    last_action_summary: str = "none",
+) -> Tuple[str, str]:
+    """
+    Build (system_prompt, user_message) pair for the in-process TextLLM
+    intent classifier.
+
+    Returns a tuple suitable for TextLLM.call_structured().
+    """
+    user_msg = _LLM_INTENT_USER_TEMPLATE.format(
+        current_stage=current_stage,
+        element_count=element_count,
+        has_critical=str(has_critical).lower(),
+        pending_hitl=str(pending_hitl).lower(),
+        conversation_tail=conversation_tail or "none",
+        last_action_summary=last_action_summary or "none",
+        user_query=user_query,
+    )
+    return _LLM_INTENT_SYSTEM_PROMPT, user_msg
+
+
 # 1.1  Complete Regex Rule Set
 #
 # Design notes:
@@ -52,6 +244,8 @@ class ParsedIntent:
 # ── Element-type extractor (shared) ────────────────────────────────────────
 _ELEMENT_TYPE_PATTERN = re.compile(
     r"\b(face|faces|person|people|text|texts?|screen|screens?|"
+    r"laptop|laptops?|monitor|monitors?|computer|computers?|"
+    r"phone|phones?|tv|television|televisions?|"
     r"label|labels?|number|numbers?|object|objects?)\b",
     re.IGNORECASE,
 )
@@ -59,6 +253,11 @@ _ELEMENT_TYPE_MAP = {
     "face": "face", "faces": "face", "person": "face", "people": "face",
     "text": "text", "texts": "text",
     "screen": "screen", "screens": "screen",
+    "laptop": "screen", "laptops": "screen",
+    "monitor": "screen", "monitors": "screen",
+    "computer": "screen", "computers": "screen",
+    "phone": "screen", "phones": "screen",
+    "tv": "screen", "television": "screen", "televisions": "screen",
     "label": "text", "labels": "text",
     "number": "text", "numbers": "text",
     "object": "object", "objects": "object",
@@ -71,16 +270,16 @@ _METHOD_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _METHOD_MAP = {
-    "blur": "blur",
-    "pixelate": "pixelate", "pixelation": "pixelate",
+    "blur": "blur", "blurred": "blur", "blurring": "blur",
+    "pixelate": "pixelate", "pixelation": "pixelate", "pixelated": "pixelate",
     "solid overlay": "solid_overlay", "solidoverlay": "solid_overlay",
-    "solid_overlay": "solid_overlay",
-    "black box": "solid_overlay", "black_box": "solid_overlay",
-    "avatar": "avatar_replace",
+    "solid_overlay": "solid_overlay", "overlay": "solid_overlay",
+    "black box": "solid_overlay", "black_box": "solid_overlay", "blackbox": "solid_overlay",
+    "avatar": "avatar_replace", "avatar_replace": "avatar_replace",
     "emoji": "avatar_replace", "cartoon": "avatar_replace",
-    "silhouette": "avatar_replace",
+    "silhouette": "silhouette",
     "inpaint": "inpaint",
-    "generative": "generative_replace",
+    "generative": "generative_replace", "generative_replace": "generative_replace",
 }
 
 # ── Strength extractor (shared) ─────────────────────────────────────────────
@@ -103,7 +302,30 @@ def _extract_element_types(text: str) -> Optional[List[str]]:
     return types if types else None
 
 
+_FROM_TO_METHOD_PATTERN = re.compile(
+    r"(?:from\s+)?"
+    r"(?:blur|pixelate|pixelation|solid[\s_]?overlay|black[\s_]?box|"
+    r"avatar|emoji|cartoon|silhouette|inpaint|generative)"
+    r"\s+(?:to|into|with)\s+"
+    r"(blur|pixelate|pixelation|solid[\s_]?overlay|black[\s_]?box|"
+    r"avatar|emoji|cartoon|silhouette|inpaint|generative)",
+    re.IGNORECASE,
+)
+
+
+def _normalize_method(raw: str) -> Optional[str]:
+    """Normalize a raw method string to the canonical method name."""
+    key = raw.lower().replace(" ", "_")
+    return _METHOD_MAP.get(key, _METHOD_MAP.get(raw.lower()))
+
+
 def _extract_method(text: str) -> Optional[str]:
+    # First try "from X to Y" or "X to Y" pattern — return Y (the target)
+    from_to = _FROM_TO_METHOD_PATTERN.search(text)
+    if from_to:
+        return _normalize_method(from_to.group(1))
+
+    # Fallback: single method extraction (first match)
     m = _METHOD_PATTERN.search(text)
     if not m:
         return None
@@ -116,6 +338,50 @@ def _extract_strength(text: str) -> Optional[float]:
     if not m:
         return None
     return _STRENGTH_MAP.get(m.group(0).lower())
+
+
+def _extract_current_method(text: str) -> Optional[str]:
+    """Extract reference to a CURRENT protection method from the query.
+
+    Detects when user refers to existing protection by visual appearance:
+    "black box" -> solid_overlay, "blurred"/"blur" in "from blur" -> blur, etc.
+
+    Only extracts when there's a "from...to" or "change [method]" pattern,
+    not when the method is the TARGET (which is handled by _extract_method).
+    """
+    # Pattern: "change/from [current_method] ... to [new_method]"
+    # Allow up to 3 extra words between method and "to" (e.g., "blurred face to")
+    from_to = re.search(
+        r"(?:change|from|replace)\s+(?:the\s+)?"
+        r"(blur(?:red)?|pixelat(?:e|ed|ion)|solid[\s_]?overlay|black[\s_]?box(?:es)?|"
+        r"avatar(?:\s+face)?|cartoon|emoji|silhouette)"
+        r"(?:\s+\w+){0,3}\s+(?:to|into|with|for)\b",
+        text, re.IGNORECASE,
+    )
+    if from_to:
+        raw = from_to.group(1).lower().strip()
+        # Normalize to canonical method name
+        if "black" in raw or "solid" in raw:
+            return "solid_overlay"
+        if "blur" in raw:
+            return "blur"
+        if "pixelat" in raw:
+            return "pixelate"
+        if "silhouette" in raw:
+            return "silhouette"
+        if "avatar" in raw or "cartoon" in raw or "emoji" in raw:
+            return "avatar_replace"
+
+    # Pattern: "black box(es) protecting..." (reference to current solid_overlay)
+    # But NOT when "black box" appears after "to"/"back to"/"with"/"into" (that's the TARGET method)
+    bb_match = re.search(r"\bblack[\s_]?box(?:es)?\b", text, re.IGNORECASE)
+    if bb_match:
+        before = text[:bb_match.start()]
+        # If "to", "back to", "with", or "into" appears before the match, it's the target
+        if not re.search(r"\b(?:to|with|into)\b", before, re.IGNORECASE):
+            return "solid_overlay"
+
+    return None
 
 
 def _target_stage_for_method_change() -> str:
@@ -135,7 +401,7 @@ def _target_stage_for_strengthen() -> str:
 _RAW_PATTERNS: List[Tuple[str, IntentAction, str, str]] = [
     # ── REJECT / APPROVE (before IGNORE to prevent "no" matching both) ────
     (
-        r"^(?:no|nope|reject|cancel|decline)\b"
+        r"^(?:no|nope|reject|cancel|decline)\b(?!\s*[,.]?\s*\w{2,})"
         r"|^don['']t(?:\s+do\s+(?:it|that))?\b(?!\s*protect)"
         r"|^revert\s+(?:changes?|that)\b",
         IntentAction.REJECT, "", "Negative confirmation"
@@ -192,6 +458,30 @@ _RAW_PATTERNS: List[Tuple[str, IntentAction, str, str]] = [
         r"(?:blur|pixelate|solid[\s_]?overlay|avatar)\s+"
         r"(?:the\s+)?(?:face|faces?|person|people|text|screen|object)",
         IntentAction.MODIFY_STRATEGY, "strategy", "Verb-method + element type"
+    ),
+
+    # ── MODIFY_STRATEGY — "change [element] to [method]" (element-first) ──
+    # Also handles "change [element] back to [method]"
+    (
+        r"(?:change|modify|switch|replace|convert)\s+"
+        r"(?:the\s+)?(?:face|faces?|person|people|text|screen|object|label|labels?)"
+        r"\s+(?:back\s+)?(?:to|with|into)\s+"
+        r"(?:blur|pixelate|pixelation|solid[\s_]?overlay|black[\s_]?box|avatar|emoji|cartoon|silhouette|inpaint|none)",
+        IntentAction.MODIFY_STRATEGY, "strategy", "Change element to method"
+    ),
+    # ── MODIFY_STRATEGY — "[method] instead of [method]" ──
+    (
+        r"(?:blur|pixelate|solid[\s_]?overlay|avatar|emoji|cartoon|silhouette|inpaint)"
+        r"\s+(?:instead\s+of|rather\s+than|not)\s+"
+        r"(?:blur|pixelate|solid[\s_]?overlay|avatar|emoji|cartoon|silhouette|inpaint)",
+        IntentAction.MODIFY_STRATEGY, "strategy", "Method swap"
+    ),
+    # ── MODIFY_STRATEGY — "use [method] for/on [element]" ──
+    (
+        r"(?:use|apply|try)\s+"
+        r"(?:blur|pixelate|solid[\s_]?overlay|avatar|emoji|cartoon|silhouette|inpaint)"
+        r"\s+(?:for|on|to)\s+(?:the\s+)?(?:face|faces?|person|people|text|screen|object)",
+        IntentAction.MODIFY_STRATEGY, "strategy", "Use method on element"
     ),
 
     # ── PROCESS ──────────────────────────────────────────────────────────
@@ -253,6 +543,12 @@ def _regex_classify(query: str) -> Optional[ParsedIntent]:
 
     for compiled, action, target_stage in _COMPILED_PATTERNS:
         if compiled.search(q):
+            extracted_constraints = {}
+            # Extract current_method for strategy-modifying intents
+            if action in {IntentAction.MODIFY_STRATEGY, IntentAction.IGNORE, IntentAction.STRENGTHEN}:
+                current = _extract_current_method(query)
+                if current:
+                    extracted_constraints["current_method"] = current
             return ParsedIntent(
                 action=action,
                 target_stage=target_stage,
@@ -262,7 +558,7 @@ def _regex_classify(query: str) -> Optional[ParsedIntent]:
                 method_specified=_extract_method(q),
                 strength_parameter=_extract_strength(q),
                 natural_language=query,
-                extracted_constraints={},
+                extracted_constraints=extracted_constraints,
                 requires_safety_check=(action in {
                     IntentAction.IGNORE, IntentAction.MODIFY_STRATEGY
                 }),
@@ -315,6 +611,14 @@ Confidence scoring rules:
 - 0.5-0.69: Two plausible actions; context needed
 - 0.0-0.49: Highly ambiguous; system will ask user to clarify
 
+IMPORTANT disambiguation rules:
+- A sentence starting with "No" or "No," followed by instructions is NOT a reject — it is a \
+refinement (modify_strategy or ignore). Only classify as reject when "no" is the entire intent \
+(e.g., "No", "Nope", "Reject this").
+- "from X to Y" or "X to Y" where X and Y are methods → modify_strategy with method_specified = Y (the target)
+- "change [element] of/from [current_method] to [new_method]" → modify_strategy with method_specified = new_method
+- "only apply to X not Y" or "not labels" → modify_strategy with extracted_constraints about scope
+
 If the query is genuinely ambiguous between two actions, set confidence ≤ 0.5
 and choose the SAFER action (the one that does less, e.g. query over modify_strategy).
 """
@@ -325,7 +629,11 @@ Current pipeline context:
   element_count : {element_count}
   has_critical  : {has_critical}
   pending_hitl  : {pending_hitl}
-  recent_actions: {recent_actions}
+
+Recent conversation:
+{conversation_tail}
+
+Last action: {last_action_summary}
 
 User message: "{user_query}"
 
@@ -340,6 +648,8 @@ def build_vlm_intent_prompt(
     has_critical: bool = False,
     pending_hitl: bool = False,
     recent_actions: Optional[List[str]] = None,
+    conversation_tail: str = "",
+    last_action_summary: str = "none",
 ) -> Tuple[str, str]:
     """
     Build (system_prompt, user_message) pair for the VLM intent classifier.
@@ -352,7 +662,8 @@ def build_vlm_intent_prompt(
         element_count=element_count,
         has_critical=str(has_critical).lower(),
         pending_hitl=str(pending_hitl).lower(),
-        recent_actions=", ".join(recent_actions or []) or "none",
+        conversation_tail=conversation_tail or "none",
+        last_action_summary=last_action_summary or "none",
         user_query=user_query,
     )
     return VLM_INTENT_SYSTEM_PROMPT, user_msg
@@ -386,16 +697,36 @@ def parse_vlm_intent_response(
         confidence = float(data.get("confidence", 0.5))
         confidence = max(0.0, min(1.0, confidence))
 
+        # Extract element types from query if VLM didn't provide them
+        target_types = data.get("target_element_types")
+        if not target_types:
+            target_types = _extract_element_types(original_query)
+
+        # Extract method from query if VLM didn't provide it, and normalize
+        # VLM aliases (e.g. "avatar" → "avatar_replace", "black box" → "solid_overlay")
+        method = data.get("method_specified")
+        if method:
+            method = _normalize_method(method) or method
+        if not method:
+            method = _extract_method(original_query)
+
+        # Extract current_method constraint if VLM didn't provide it
+        constraints = data.get("extracted_constraints", {})
+        if isinstance(constraints, dict) and "current_method" not in constraints:
+            current = _extract_current_method(original_query)
+            if current:
+                constraints["current_method"] = current
+
         return ParsedIntent(
             action=action,
             target_stage=data.get("target_stage", "strategy"),
             target_elements=None,
-            target_element_types=data.get("target_element_types"),
+            target_element_types=target_types,
             confidence=confidence,
-            method_specified=data.get("method_specified"),
+            method_specified=method,
             strength_parameter=data.get("strength_parameter"),
             natural_language=original_query,
-            extracted_constraints=data.get("extracted_constraints", {}),
+            extracted_constraints=constraints,
             requires_safety_check=bool(data.get("requires_safety_check", False)),
             requires_checkpoint=(confidence < 0.8),
         )
@@ -538,74 +869,108 @@ def hybrid_classify(
     query: str,
     vlm_call_fn=None,               # Optional callable: (system, user) -> str
     context: Optional[Dict] = None,  # Pipeline context for VLM prompt
+    intent_llm: Optional["TextLLM"] = None,  # In-process small LLM (preferred over vlm_call_fn)
 ) -> ParsedIntent:
     """
-    Two-level hybrid classifier.
+    LLM-first hybrid classifier.
 
-    1. Try regex fast-path (0ms).
-    2. If no match, call VLM (≤1s).
-    3. Decompose multi-intents.
-    4. Attach requires_checkpoint based on confidence thresholds.
+    For short (1-2 word) inputs, regex handles them instantly and unambiguously.
+    For longer (3+ word) inputs, the LLM is ALWAYS tried first because regex
+    patterns can match too aggressively (e.g., "No, only apply blur to values"
+    starts with "No" which triggers the REJECT regex, misclassifying a
+    refinement command as a rejection).
+
+    Classification levels:
+      Level 0: Regex fast-path for trivial 1-2 word commands ("yes", "undo").
+      Level 1: LLM structured classification (PRIMARY for 3+ words).
+      Level 2: Regex fallback (when LLM is unavailable).
+      Level 3: VLM server fallback.
+      Level 4: Safe default (QUERY, confidence=0.3).
 
     Args:
         query:       Raw user natural language string.
         vlm_call_fn: Callable(system_prompt: str, user_msg: str) -> str.
                      Must return the raw VLM response text.
-                     If None, falls back to QUERY with confidence=0.3.
+                     If None and intent_llm is None, falls back to QUERY with confidence=0.3.
         context:     Dict with keys: current_stage, element_count,
                      has_critical, pending_hitl, recent_actions.
+        intent_llm:  In-process TextLLM instance for structured classification.
+                     When provided, used as the primary classifier for multi-word inputs.
 
     Returns ParsedIntent. Never raises.
     """
     ctx = context or {}
 
     def _classify_single(q: str) -> ParsedIntent:
-        # Level 1: regex
+        word_count = len(q.split())
+
+        # Level 0: Trivial 1-2 word commands — regex only
+        # Unambiguous short inputs like "approve", "undo", "yes", "no", "reject"
+        if word_count <= 2:
+            result = _regex_classify(q)
+            if result is not None:
+                return result
+
+        # Level 1: LLM structured classification (PRIMARY for multi-word)
+        if intent_llm is not None:
+            system_prompt, user_msg = build_intent_llm_prompt(
+                user_query=q,
+                current_stage=ctx.get("current_stage", "unknown"),
+                element_count=ctx.get("element_count", 0),
+                has_critical=ctx.get("has_critical", False),
+                pending_hitl=ctx.get("pending_hitl", False),
+                recent_actions=ctx.get("recent_actions"),
+                conversation_tail=ctx.get("conversation_tail", ""),
+                last_action_summary=ctx.get("last_action_summary", "none"),
+            )
+            try:
+                classification = intent_llm.call_structured(
+                    system_prompt=system_prompt,
+                    user_message=user_msg,
+                    response_model=IntentClassification,
+                    max_tokens=256,
+                )
+                return classification.to_parsed_intent(q)
+            except Exception as exc:
+                logger.warning("Intent LLM failed: %s", exc)
+
+        # Level 2: Regex fallback (for when LLM is unavailable)
         result = _regex_classify(q)
         if result is not None:
             return result
 
-        # Level 2: VLM
-        if vlm_call_fn is None:
-            return ParsedIntent(
-                action=IntentAction.QUERY,
-                target_stage="",
-                target_elements=None,
-                target_element_types=None,
-                confidence=0.3,
-                method_specified=None,
-                strength_parameter=None,
-                natural_language=q,
-                extracted_constraints={},
-                requires_safety_check=False,
-                requires_checkpoint=True,
+        # Level 3: VLM server fallback
+        if vlm_call_fn is not None:
+            system_prompt, user_msg = build_vlm_intent_prompt(
+                user_query=q,
+                current_stage=ctx.get("current_stage", "unknown"),
+                element_count=ctx.get("element_count", 0),
+                has_critical=ctx.get("has_critical", False),
+                pending_hitl=ctx.get("pending_hitl", False),
+                recent_actions=ctx.get("recent_actions"),
+                conversation_tail=ctx.get("conversation_tail", ""),
+                last_action_summary=ctx.get("last_action_summary", "none"),
             )
+            try:
+                raw = vlm_call_fn(system_prompt, user_msg)
+                return parse_vlm_intent_response(raw, q)
+            except Exception as exc:
+                logger.warning("VLM intent fallback failed: %s", exc)
 
-        system_prompt, user_msg = build_vlm_intent_prompt(
-            user_query=q,
-            current_stage=ctx.get("current_stage", "unknown"),
-            element_count=ctx.get("element_count", 0),
-            has_critical=ctx.get("has_critical", False),
-            pending_hitl=ctx.get("pending_hitl", False),
-            recent_actions=ctx.get("recent_actions"),
+        # Level 4: No LLM available — safe default
+        return ParsedIntent(
+            action=IntentAction.QUERY,
+            target_stage="",
+            target_elements=None,
+            target_element_types=None,
+            confidence=0.3,
+            method_specified=None,
+            strength_parameter=None,
+            natural_language=q,
+            extracted_constraints={},
+            requires_safety_check=False,
+            requires_checkpoint=True,
         )
-        try:
-            raw = vlm_call_fn(system_prompt, user_msg)
-            return parse_vlm_intent_response(raw, q)
-        except Exception:
-            return ParsedIntent(
-                action=IntentAction.QUERY,
-                target_stage="",
-                target_elements=None,
-                target_element_types=None,
-                confidence=0.3,
-                method_specified=None,
-                strength_parameter=None,
-                natural_language=q,
-                extracted_constraints={},
-                requires_safety_check=False,
-                requires_checkpoint=True,
-            )
 
     # Decompose multi-intent before classifying
     result = decompose_multi_intent(query, _classify_single)

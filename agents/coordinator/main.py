@@ -106,6 +106,7 @@ class CoordinatorSession:
             "entry_stage": "detection",
             "fallback_only": fallback_only,
             "pending_modifications": [],
+            "last_applied_modifications": [],
             "stage_timings": {},
             "errors": {},
             "phase_disagreements": [],
@@ -126,6 +127,7 @@ class CoordinatorSession:
             "audit_trail": [],
             "snapshots": [],
             "hitl_presentation": None,
+            "pending_challenge": None,
         }
     # Public API
 
@@ -185,8 +187,10 @@ class CoordinatorSession:
             self._state["pipeline_action_taken"] = None
 
             try:
-                # Invoke the LangGraph (or fallback) coordinator synchronously
-                new_state = self._graph.invoke(self._state)
+                # Invoke the LangGraph (or fallback) coordinator synchronously.
+                # MemorySaver checkpointer requires thread_id in configurable.
+                _config = {"configurable": {"thread_id": self.session_id}}
+                new_state = self._graph.invoke(self._state, config=_config)
                 if new_state is not None:
                     self._state = new_state
             except Exception as exc:
@@ -228,8 +232,9 @@ class CoordinatorSession:
             self._state["pipeline_state"] = pipeline_state  # type: ignore[assignment]
 
     def get_pipeline_state(self) -> Optional[InnerPipelineState]:
-        """Return the current InnerPipelineState (read-only snapshot)."""
-        return self._state.get("pipeline_state")
+        """Return the current InnerPipelineState (shallow copy for read-only use)."""
+        ps = self._state.get("pipeline_state")
+        return dict(ps) if ps is not None else None  # type: ignore[return-value]
 
     def get_conversation_history(self) -> List[Dict[str, str]]:
         """Return the conversation history as a list of {role, content} dicts."""

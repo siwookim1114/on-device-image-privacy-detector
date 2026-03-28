@@ -494,6 +494,7 @@ class PipelineOrchestrator:
             success=success,
             protected_image_path=protected_path,
             risk_analysis=risk_result,
+            strategy_recommendations=strategy_result,
             execution_report=execution_report,
             total_time_ms=total_ms,
             error_message=pipeline_error,

@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 from langchain_core.messages import HumanMessage
 from langgraph.errors import GraphRecursionError
 
@@ -253,12 +253,12 @@ class ExecutionAgent:
             except Exception as e:
                 print(f"    SAM mask failed for {strategy.element}: {e}, falling back to bbox")
 
-        # Try polygon overlay for text solid_overlay (tighter than axis-aligned bbox)
-        if method == ObfuscationMethod.SOLID_OVERLAY and "text" in strategy.element.lower():
+        # Try polygon overlay for text obfuscation (tighter than axis-aligned bbox)
+        if method in (ObfuscationMethod.SOLID_OVERLAY, ObfuscationMethod.BLUR, ObfuscationMethod.PIXELATE) and "text" in strategy.element.lower():
             polygon = self._get_polygon(strategy.detection_id, risk_result)
             if polygon and len(polygon) >= 3:
                 try:
-                    self._apply_polygon_overlay(image, polygon, params)
+                    self._apply_polygon_overlay(image, polygon, params, method=method)
                     print(f"    POLY {method.value:15} -> {strategy.element[:40]}")
                     return False
                 except Exception as e:
@@ -299,15 +299,52 @@ class ExecutionAgent:
         return None
 
     def _apply_polygon_overlay(
-        self, image: Image.Image, polygon: List[List[int]], params: dict
+        self, image: Image.Image, polygon: List[List[int]], params: dict,
+        method: Optional[ObfuscationMethod] = None,
     ):
-        """Apply solid_overlay using a polygon (tighter than axis-aligned bbox)."""
-        color = params.get("color", "black")
-        if color == "black" or isinstance(color, str):
-            color = (0, 0, 0)
-        draw = ImageDraw.Draw(image)
+        """Apply obfuscation within a tight polygon region.
+
+        Supports solid_overlay (fill), blur (masked gaussian), and pixelate (masked mosaic).
+        Falls back to solid_overlay if method is None.
+        """
+
         pts = [(p[0], p[1]) for p in polygon]
-        draw.polygon(pts, fill=color)
+
+        if method in (ObfuscationMethod.BLUR, ObfuscationMethod.PIXELATE):
+            # Create polygon mask
+            mask = Image.new("L", image.size, 0)
+            draw_mask = ImageDraw.Draw(mask)
+            draw_mask.polygon(pts, fill=255)
+
+            # Get bounding box of polygon for efficient processing
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            x1, y1, x2, y2 = max(0, min(xs)), max(0, min(ys)), min(image.width, max(xs)), min(image.height, max(ys))
+            if x2 <= x1 or y2 <= y1:
+                return
+
+            region = image.crop((x1, y1, x2, y2))
+            mask_region = mask.crop((x1, y1, x2, y2))
+
+            if method == ObfuscationMethod.BLUR:
+                kernel = params.get("kernel_size", 25)
+                blurred = region.filter(ImageFilter.GaussianBlur(radius=kernel // 2))
+                image.paste(blurred, (x1, y1), mask_region)
+            elif method == ObfuscationMethod.PIXELATE:
+                block = params.get("block_size", 10)
+                rw, rh = x2 - x1, y2 - y1
+                small = region.resize(
+                    (max(1, rw // block), max(1, rh // block)), Image.NEAREST
+                )
+                pixelated = small.resize((rw, rh), Image.NEAREST)
+                image.paste(pixelated, (x1, y1), mask_region)
+        else:
+            # Solid overlay (original behavior)
+            color = params.get("color", "black")
+            if color == "black" or isinstance(color, str):
+                color = (0, 0, 0)
+            draw = ImageDraw.Draw(image)
+            draw.polygon(pts, fill=color)
 
     def _restore_labels(
         self,

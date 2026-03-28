@@ -18,8 +18,10 @@ uses asyncio.run_coroutine_threadsafe() to cross the thread boundary safely.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from agents.coordinator.state import InnerPipelineState
@@ -51,6 +53,15 @@ class NodeContext:
     # Configuration
     output_dir: str = "data/full_pipeline_results"
     fallback_only: bool = False
+
+    # HITL mode: "hybrid" | "full_manual" | "auto_only" (default HYBRID)
+    hitl_mode: str = "hybrid"
+
+    # Optional lightweight text LLM for intent classification / response generation
+    text_llm: Any = None
+
+    # Cached PrecisionSegmenter instance (lazy-initialised in node_sam)
+    _segmenter: Any = None
 # WS event helpers
 
 def _emit_stage_start(
@@ -144,9 +155,7 @@ def node_detection(state: InnerPipelineState, ctx: NodeContext) -> InnerPipeline
         if ctx.detection_agent is None:
             raise RuntimeError("DetectionAgent not initialised in NodeContext.")
 
-        from PIL import Image as PILImage  # noqa: PLC0415
-        image = PILImage.open(image_path).convert("RGB")
-        detections = ctx.detection_agent.run(image, image_path)
+        detections = ctx.detection_agent.run(image_path)
 
         elapsed_ms = (time.time() - t0) * 1000
         timings["detection"] = round(elapsed_ms, 1)
@@ -162,10 +171,15 @@ def node_detection(state: InnerPipelineState, ctx: NodeContext) -> InnerPipeline
             {"elements_detected": n_elements},
         )
 
+        # Cache annotated image for downstream VLM agents
+        annotated_image = None
+        if hasattr(ctx.detection_agent, "get_annotated_image"):
+            annotated_image = ctx.detection_agent.get_annotated_image()
+
         return {  # type: ignore[return-value]
             **state,
             "detections": detections,
-            "_cached_image": image,
+            "_cached_image": annotated_image,
             "stage_timings": timings,
             "errors": errors,
         }
@@ -187,12 +201,11 @@ def node_risk(state: InnerPipelineState, ctx: NodeContext) -> InnerPipelineState
     """
     Phase B — Agent 2: Two-phase risk assessment.
 
-    Calls RiskAssessmentAgent.run(detections, image, fallback_only).
+    Calls RiskAssessmentAgent.run(detections, annotated_image).
     Stores result in state["risk_result"].
     """
     session_id = state.get("session_id", "unknown")
     image_path = state.get("image_path", "")
-    fallback_only = state.get("fallback_only", ctx.fallback_only)
 
     _emit_stage_start(
         ctx, session_id, "risk", "Risk Assessment",
@@ -216,8 +229,7 @@ def node_risk(state: InnerPipelineState, ctx: NodeContext) -> InnerPipelineState
 
         risk_result = ctx.risk_agent.run(
             detections=detections,
-            image=image,
-            fallback_only=fallback_only,
+            annotated_image=image,
         )
 
         elapsed_ms = (time.time() - t0) * 1000
@@ -295,9 +307,14 @@ def node_consent(state: InnerPipelineState, ctx: NodeContext) -> InnerPipelineSt
         elapsed_ms = (time.time() - t0) * 1000
         timings["consent"] = round(elapsed_ms, 1)
 
-        # identity_result may be the updated risk_result or a separate object
-        # Accept both patterns used in the codebase
-        if isinstance(identity_result, dict) and "assessments" in identity_result:
+        # identity_result may be the updated risk_result or a separate object.
+        # RiskAnalysisResult model uses "risk_assessments" field;
+        # dict representations may use "assessments" or "risk_assessments".
+        if isinstance(identity_result, dict) and "risk_assessments" in identity_result:
+            updated_risk = identity_result
+        elif isinstance(identity_result, dict) and "assessments" in identity_result:
+            updated_risk = identity_result
+        elif hasattr(identity_result, "risk_assessments"):
             updated_risk = identity_result
         elif hasattr(identity_result, "assessments"):
             updated_risk = identity_result
@@ -330,12 +347,11 @@ def node_strategy(state: InnerPipelineState, ctx: NodeContext) -> InnerPipelineS
     """
     Phase D — Agent 3: Obfuscation strategy recommendation.
 
-    Calls StrategyAgent.run(risk_result, detections, fallback_only).
+    Calls StrategyAgent.run(risk_result, image_path, annotated_image).
     Stores result in state["strategy_result"].
     """
     session_id = state.get("session_id", "unknown")
     image_path = state.get("image_path", "")
-    fallback_only = state.get("fallback_only", ctx.fallback_only)
 
     _emit_stage_start(
         ctx, session_id, "strategy", "Strategy",
@@ -351,7 +367,6 @@ def node_strategy(state: InnerPipelineState, ctx: NodeContext) -> InnerPipelineS
             raise RuntimeError("StrategyAgent not initialised in NodeContext.")
 
         risk_result = state.get("risk_result")
-        detections = state.get("detections")
 
         if risk_result is None:
             raise ValueError("Risk assessment results required before strategy stage.")
@@ -361,9 +376,8 @@ def node_strategy(state: InnerPipelineState, ctx: NodeContext) -> InnerPipelineS
 
         strategy_result = ctx.strategy_agent.run(
             risk_result=risk_result,
-            detections=detections,
-            image=image,
-            fallback_only=fallback_only,
+            image_path=image_path,
+            annotated_image=image,
         )
 
         elapsed_ms = (time.time() - t0) * 1000
@@ -445,13 +459,31 @@ def node_sam(state: InnerPipelineState, ctx: NodeContext) -> InnerPipelineState:
                 "errors": errors,
             }
 
-        from PIL import Image as PILImage  # noqa: PLC0415
-        image = state.get("_cached_image") or PILImage.open(image_path).convert("RGB")
+        # Extract strategies list from StrategyRecommendations (model or dict)
+        if hasattr(strategy_result, "strategies"):
+            strategies_list = strategy_result.strategies
+        elif isinstance(strategy_result, dict):
+            strategies_list = strategy_result.get("strategies", [])
+        else:
+            strategies_list = []
 
-        segmenter = PrecisionSegmenter()
-        seg_results = segmenter.run(
-            image=image,
-            strategy_result=strategy_result,
+        # Extract risk_assessments list from RiskAnalysisResult (model or dict)
+        risk_result = state.get("risk_result")
+        if hasattr(risk_result, "risk_assessments"):
+            risk_assessments_list = risk_result.risk_assessments
+        elif isinstance(risk_result, dict):
+            risk_assessments_list = risk_result.get("risk_assessments",
+                                                     risk_result.get("assessments", []))
+        else:
+            risk_assessments_list = []
+
+        if ctx._segmenter is None:
+            ctx._segmenter = PrecisionSegmenter()
+        segmenter = ctx._segmenter
+        seg_results = segmenter.process_strategies(
+            image_path=image_path,
+            strategies=strategies_list,
+            risk_assessments=risk_assessments_list,
             output_dir=ctx.output_dir,
         )
 
@@ -488,12 +520,11 @@ def node_execution(state: InnerPipelineState, ctx: NodeContext) -> InnerPipeline
     """
     Phase E — Agent 4: Two-phase execution (apply + VLM verify).
 
-    Calls ExecutionAgent.run(image, strategy_result, seg_results, fallback_only).
+    Calls ExecutionAgent.run(strategy_result, risk_result, image_path, output_path).
     Stores protected image path + execution report.
     """
     session_id = state.get("session_id", "unknown")
     image_path = state.get("image_path", "")
-    fallback_only = state.get("fallback_only", ctx.fallback_only)
 
     _emit_stage_start(
         ctx, session_id, "execution", "Execution",
@@ -509,21 +540,58 @@ def node_execution(state: InnerPipelineState, ctx: NodeContext) -> InnerPipeline
             raise RuntimeError("ExecutionAgent not initialised in NodeContext.")
 
         strategy_result = state.get("strategy_result")
-        seg_results = state.get("seg_results") or {}
+        risk_result = state.get("risk_result")
 
         if strategy_result is None:
             raise ValueError("Strategy results required before execution stage.")
+        if risk_result is None:
+            raise ValueError("Risk assessment results required before execution stage.")
 
-        from PIL import Image as PILImage  # noqa: PLC0415
-        image = state.get("_cached_image") or PILImage.open(image_path).convert("RGB")
+        # Convert dict to model if needed (ExecutionAgent expects model objects)
+        from utils.models import StrategyRecommendations, RiskAnalysisResult  # noqa: PLC0415
+
+        if isinstance(strategy_result, dict):
+            strategy_result = StrategyRecommendations(**strategy_result)
+        if isinstance(risk_result, dict):
+            risk_result = RiskAnalysisResult(**risk_result)
+
+        # Wire SAM segmentation mask paths into strategy objects
+        seg_results = state.get("seg_results") or {}
+        if seg_results:
+            strategies = (
+                strategy_result.strategies
+                if hasattr(strategy_result, "strategies")
+                else []
+            )
+            for strategy in strategies:
+                det_id = (
+                    strategy.detection_id
+                    if hasattr(strategy, "detection_id")
+                    else strategy.get("detection_id")
+                )
+                if det_id and det_id in seg_results:
+                    mask_data = seg_results[det_id]
+                    mask_path = (
+                        mask_data.get("mask_path")
+                        if isinstance(mask_data, dict)
+                        else getattr(mask_data, "mask_path", None)
+                    )
+                    if hasattr(strategy, "segmentation_mask_path"):
+                        strategy.segmentation_mask_path = mask_path
+                    elif isinstance(strategy, dict):
+                        strategy["segmentation_mask_path"] = mask_path
+
+        # Build output path from output_dir + image stem
+        output_path = os.path.join(
+            ctx.output_dir,
+            f"{Path(image_path).stem}_protected.png",
+        )
 
         execution_result = ctx.execution_agent.run(
-            image=image,
-            image_path=image_path,
             strategy_result=strategy_result,
-            seg_results=seg_results,
-            fallback_only=fallback_only,
-            output_dir=ctx.output_dir,
+            risk_result=risk_result,
+            image_path=image_path,
+            output_path=output_path,
         )
 
         elapsed_ms = (time.time() - t0) * 1000
@@ -579,19 +647,16 @@ def node_export(state: InnerPipelineState, ctx: NodeContext) -> InnerPipelineSta
     timings = dict(state.get("stage_timings") or {})
 
     try:
-        from PIL import Image as PILImage  # noqa: PLC0415
         from utils.visualization import (  # noqa: PLC0415
             export_risk_results_json,
             generate_risk_map,
             export_strategy_results_json,
         )
-        import os  # noqa: PLC0415
 
         # Determine sample name from image path
         sample_name = os.path.splitext(os.path.basename(image_path))[0]
         output_dir = ctx.output_dir
 
-        image = state.get("_cached_image") or PILImage.open(image_path).convert("RGB")
         risk_result = state.get("risk_result")
         strategy_result = state.get("strategy_result")
 
@@ -600,14 +665,20 @@ def node_export(state: InnerPipelineState, ctx: NodeContext) -> InnerPipelineSta
 
         if risk_result is not None:
             try:
+                # Convert dict to model if needed
+                from utils.models import RiskAnalysisResult  # noqa: PLC0415
+                risk_model = risk_result
+                if isinstance(risk_result, dict):
+                    risk_model = RiskAnalysisResult(**risk_result)
+
                 export_risk_results_json(
-                    risk_result=risk_result,
+                    result=risk_model,
                     output_path=os.path.join(output_dir, f"{sample_name}_risk_results.json"),
                 )
                 risk_map_path = os.path.join(output_dir, f"{sample_name}_risk_map.png")
                 generate_risk_map(
-                    image=image,
-                    risk_result=risk_result,
+                    result=risk_model,
+                    image_path=image_path,
                     output_path=risk_map_path,
                 )
             except Exception as export_exc:
@@ -616,11 +687,17 @@ def node_export(state: InnerPipelineState, ctx: NodeContext) -> InnerPipelineSta
 
         if strategy_result is not None:
             try:
+                # Convert dict to model if needed
+                from utils.models import StrategyRecommendations  # noqa: PLC0415
+                strategy_model = strategy_result
+                if isinstance(strategy_result, dict):
+                    strategy_model = StrategyRecommendations(**strategy_result)
+
                 strategy_json_path = os.path.join(
                     output_dir, f"{sample_name}_strategies.json"
                 )
                 export_strategy_results_json(
-                    strategy_result=strategy_result,
+                    result=strategy_model,
                     output_path=strategy_json_path,
                 )
             except Exception as strat_exc:

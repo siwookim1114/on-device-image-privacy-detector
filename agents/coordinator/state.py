@@ -63,6 +63,9 @@ class PipelineSnapshot(TypedDict, total=False):
     strategy_result: Optional[dict]
     execution_report: Optional[dict]
     protected_image_path: Optional[str]
+    seg_results: Optional[dict]
+    risk_map_path: Optional[str]
+    strategy_json_path: Optional[str]
 # InnerPipelineState
 
 class InnerPipelineState(TypedDict, total=False):
@@ -121,6 +124,10 @@ class InnerPipelineState(TypedDict, total=False):
     # User-requested modifications (accumulated between HITL pauses)
     # Each item: {"detection_id": str, "type": str, "value": str, ...}
     pending_modifications: List[Dict[str, Any]]
+
+    # Snapshot of the last batch of applied modifications (for multi-turn "change back")
+    # Preserved before pending_modifications is cleared during pipeline re-run
+    last_applied_modifications: List[Dict[str, Any]]
 
     # Per-stage timing (stage_name → elapsed_ms)
     stage_timings: Dict[str, float]
@@ -186,3 +193,7 @@ class CoordinatorState(TypedDict, total=False):
 
     # Grouped HITL presentation data for the UI
     hitl_presentation: Optional[Dict[str, Any]]
+
+    # Pending safety challenge awaiting user confirmation.
+    # Dict with keys: detection_id, action, method (or None when no challenge is active)
+    pending_challenge: Optional[Dict[str, Any]]

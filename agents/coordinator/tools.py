@@ -87,7 +87,9 @@ def _find_assessment(pipeline_state: Dict, detection_id: str) -> Optional[Dict]:
 
     # Handle both dict and model-object representations
     if isinstance(risk_result, dict):
-        assessments = risk_result.get("assessments", [])
+        assessments = risk_result.get("risk_assessments", risk_result.get("assessments", []))
+    elif hasattr(risk_result, "risk_assessments"):
+        assessments = risk_result.risk_assessments
     elif hasattr(risk_result, "assessments"):
         assessments = risk_result.assessments
     else:
@@ -126,7 +128,9 @@ def _all_assessments(pipeline_state: Dict) -> List[Dict]:
     if risk_result is None:
         return []
     if isinstance(risk_result, dict):
-        items = risk_result.get("assessments", [])
+        items = risk_result.get("risk_assessments", risk_result.get("assessments", []))
+    elif hasattr(risk_result, "risk_assessments"):
+        items = risk_result.risk_assessments
     elif hasattr(risk_result, "assessments"):
         items = risk_result.assessments
     else:
@@ -268,10 +272,14 @@ def query_strategies(pipeline_state: Optional[Dict]) -> Dict[str, Any]:
 
     summarised = []
     for s in strategies:
+        method = s.get("recommended_method") or s.get("method")
+        # Normalise enum values to plain strings
+        if hasattr(method, "value"):
+            method = method.value
         summarised.append({
             "detection_id": s.get("detection_id"),
-            "element_type": s.get("element_type"),
-            "method":       s.get("method"),
+            "element_type": s.get("element_type") or s.get("element"),
+            "method":       method,
             "parameters":   s.get("parameters", {}),
             "severity":     s.get("severity"),
             "screen_state": s.get("screen_state"),
@@ -279,7 +287,8 @@ def query_strategies(pipeline_state: Optional[Dict]) -> Dict[str, Any]:
         })
 
     protected_count = sum(
-        1 for s in strategies if s.get("method") not in {None, "none"}
+        1 for s in strategies
+        if (s.get("recommended_method") or s.get("method")) not in {None, "none"}
     )
     skipped_count = len(strategies) - protected_count
 
@@ -447,7 +456,8 @@ def apply_strategy_change(
         )
 
     strategy = _find_strategy(pipeline_state, detection_id) or {}
-    original_method = strategy.get("method", "none") or "none"
+    _raw_method = strategy.get("recommended_method") or strategy.get("method") or "none"
+    original_method = _raw_method.value if hasattr(_raw_method, "value") else (_raw_method or "none")
 
     return _validate_and_apply(
         safety_kernel=safety_kernel,
@@ -544,7 +554,8 @@ def apply_strengthen(
         )
 
     strategy = _find_strategy(pipeline_state, detection_id) or {}
-    original_method = strategy.get("method", "none") or "none"
+    _raw_method = strategy.get("recommended_method") or strategy.get("method") or "none"
+    original_method = _raw_method.value if hasattr(_raw_method, "value") else (_raw_method or "none")
 
     # If no method upgrade is requested, treat as an expand-only strengthen
     if new_method is None:

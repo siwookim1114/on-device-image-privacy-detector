@@ -157,7 +157,9 @@ def _extract_assessments_list(risk_result: Any) -> List[Dict]:
     if risk_result is None:
         return []
     if isinstance(risk_result, dict):
-        items = risk_result.get("assessments", [])
+        items = risk_result.get("risk_assessments", risk_result.get("assessments", []))
+    elif hasattr(risk_result, "risk_assessments"):
+        items = list(risk_result.risk_assessments)
     elif hasattr(risk_result, "assessments"):
         items = list(risk_result.assessments)
     else:
@@ -206,6 +208,57 @@ def _make_vlm_call_fn(ctx: NodeContext):
     return _call
 
 
+def _build_conversation_tail(history: list, max_messages: int = 4) -> str:
+    """Format last N messages of conversation for LLM context."""
+    if not history or len(history) <= 1:
+        return ""
+    # Exclude the current message (last entry) — take previous turns
+    tail = history[:-1][-max_messages:]
+    lines = []
+    for msg in tail:
+        role = msg.get("role", "user").capitalize()
+        content = msg.get("content", "")[:150]  # truncate long messages
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines)
+
+
+def _build_last_action_summary(pipeline_state: dict) -> str:
+    """Summarize the last batch of modifications for multi-turn context."""
+    pending = pipeline_state.get("last_applied_modifications") or pipeline_state.get("pending_modifications") or []
+    if not pending:
+        return "none"
+
+    # Get the latest batch (entries within 2 seconds of the newest)
+    latest_ts = max(m.get("timestamp", 0) for m in pending)
+    batch = [m for m in pending if abs(m.get("timestamp", 0) - latest_ts) < 2.0]
+
+    if not batch:
+        return "none"
+
+    # Summarize
+    actions = {}
+    for m in batch:
+        action = m.get("type", "modify")
+        value = m.get("value", "unknown")
+        prev = m.get("previous_value", "unknown")
+        key = (action, prev, value)
+        actions[key] = actions.get(key, 0) + 1
+
+    parts = []
+    for (action, prev, value), count in actions.items():
+        if prev and prev != "unknown" and prev != value:
+            parts.append(f"Changed {count} element(s) from {prev} to {value}")
+        else:
+            parts.append(f"Applied {action} to {count} element(s): {value}")
+
+    return "; ".join(parts) if parts else "none"
+
+
+def _make_intent_llm(ctx: NodeContext):
+    """Return the TextLLM instance from ctx, or None."""
+    return getattr(ctx, "text_llm", None)
+
+
 def _run_node_with_timeout(node_fn, pipeline_state, ctx, timeout_s=_STAGE_TIMEOUT_S):
     """Run a pipeline node function with a timeout. Returns updated state."""
     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -246,6 +299,9 @@ def _take_snapshot(state: CoordinatorState) -> PipelineSnapshot:
         "strategy_result": _safe_copy(pipeline_state.get("strategy_result")),
         "execution_report": _safe_copy(pipeline_state.get("execution_report")),
         "protected_image_path": pipeline_state.get("protected_image_path"),
+        "seg_results": _safe_copy(pipeline_state.get("seg_results")),
+        "risk_map_path": pipeline_state.get("risk_map_path"),
+        "strategy_json_path": pipeline_state.get("strategy_json_path"),
     }
 
 
@@ -254,7 +310,8 @@ def _restore_snapshot(state: CoordinatorState, snapshot: Dict) -> CoordinatorSta
     pipeline_state = dict(state.get("pipeline_state") or {})
 
     for key in ("detections", "risk_result", "strategy_result",
-                "execution_report", "protected_image_path"):
+                "execution_report", "protected_image_path",
+                "seg_results", "risk_map_path", "strategy_json_path"):
         if key in snapshot and snapshot[key] is not None:
             pipeline_state[key] = snapshot[key]
 
@@ -309,7 +366,7 @@ def _detect_disagreements_strategy(
 
     for s in strategies:
         phase1_method = s.get("original_method") or s.get("phase1_method", "")
-        phase2_method = s.get("method", "")
+        phase2_method = s.get("recommended_method") or s.get("method", "")
         if phase1_method and phase2_method and phase1_method != phase2_method:
             disagreements.append({
                 "stage": "strategy",
@@ -338,19 +395,19 @@ def _build_hitl_presentation(
     assessments = _extract_assessments_list(pipeline_state.get("risk_result"))
     disagreements = list(pipeline_state.get("phase_disagreements") or [])
 
-    # Group by element_type
+    # Group by element_type (ProtectionStrategy uses "element", dicts may use "element_type")
     type_groups: Dict[str, List[Dict]] = defaultdict(list)
     for s in strategies:
-        etype = s.get("element_type", "unknown")
+        etype = s.get("element_type") or s.get("element", "unknown")
         type_groups[etype].append(s)
 
     groups = []
     for etype, items in sorted(type_groups.items()):
         methods_used = list(set(
-            s.get("method", "none") for s in items
-            if s.get("method") not in (None, "none")
+            (s.get("recommended_method") or s.get("method", "none")) for s in items
+            if (s.get("recommended_method") or s.get("method")) not in (None, "none")
         ))
-        protected = [s for s in items if s.get("method") not in (None, "none")]
+        protected = [s for s in items if (s.get("recommended_method") or s.get("method")) not in (None, "none")]
         count = len(protected)
         if count == 0:
             continue
@@ -398,18 +455,20 @@ def _apply_pending_modifications(state: CoordinatorState) -> CoordinatorState:
     if not pending_mods:
         return state
 
+    from utils.models import ObfuscationMethod  # noqa: PLC0415
+
     strategy_result = pipeline_state.get("strategy_result")
     if strategy_result is None:
         return state
 
-    # Get mutable strategies list
+    # Determine whether strategy_result is a Pydantic model or plain dict
+    is_model = hasattr(strategy_result, "strategies") and not isinstance(strategy_result, dict)
+
+    # Get mutable strategies list (preserve original types for models)
     if isinstance(strategy_result, dict):
         strategies = list(strategy_result.get("strategies", []))
-    elif hasattr(strategy_result, "strategies"):
-        strategies = [
-            s if isinstance(s, dict) else (s.dict() if hasattr(s, "dict") else {})
-            for s in strategy_result.strategies
-        ]
+    elif is_model:
+        strategies = list(strategy_result.strategies)
     else:
         return state
 
@@ -425,30 +484,49 @@ def _apply_pending_modifications(state: CoordinatorState) -> CoordinatorState:
         if det_id not in strat_by_id:
             continue
         idx = strat_by_id[det_id]
-        s = strategies[idx] if isinstance(strategies[idx], dict) else dict(strategies[idx])
+        s = strategies[idx]
 
         action = mod.get("type", "")
         value = mod.get("value", "")
 
-        if action in ("ignore", IntentAction.IGNORE.value):
-            s["method"] = "none"
-        elif action in ("modify_strategy", IntentAction.MODIFY_STRATEGY.value):
-            if value:
-                s["method"] = value
-        elif action in ("strengthen", IntentAction.STRENGTHEN.value):
-            if value and value != "none":
-                s["method"] = value
-            expand_px = mod.get("expand_px", 0)
-            if expand_px:
-                params = dict(s.get("parameters") or {})
-                params["expand_px"] = expand_px
-                s["parameters"] = params
+        if isinstance(s, dict):
+            # Dict strategy — use "recommended_method" key
+            if action in ("ignore", IntentAction.IGNORE.value):
+                s["recommended_method"] = "none"
+            elif action in ("modify_strategy", IntentAction.MODIFY_STRATEGY.value):
+                if value:
+                    s["recommended_method"] = value
+            elif action in ("strengthen", IntentAction.STRENGTHEN.value):
+                if value and value != "none":
+                    s["recommended_method"] = value
+                expand_px = mod.get("expand_px", 0)
+                if expand_px:
+                    params = dict(s.get("parameters") or {})
+                    params["expand_px"] = expand_px
+                    s["parameters"] = params
+        else:
+            # Pydantic model (ProtectionStrategy) — mutate in-place
+            if action in ("ignore", IntentAction.IGNORE.value):
+                s.recommended_method = ObfuscationMethod("none")
+            elif action in ("modify_strategy", IntentAction.MODIFY_STRATEGY.value):
+                if value:
+                    s.recommended_method = ObfuscationMethod(value)
+            elif action in ("strengthen", IntentAction.STRENGTHEN.value):
+                if value and value != "none":
+                    s.recommended_method = ObfuscationMethod(value)
+                expand_px = mod.get("expand_px", 0)
+                if expand_px:
+                    params = dict(s.parameters or {})
+                    params["expand_px"] = expand_px
+                    s.parameters = params
 
         strategies[idx] = s
 
-    # Write back
+    # Write back preserving the original type
     if isinstance(strategy_result, dict):
         strategy_result = {**strategy_result, "strategies": strategies}
+    elif is_model:
+        strategy_result.strategies = strategies
     else:
         strategy_result = {"strategies": strategies}
 
@@ -488,9 +566,9 @@ def _compute_skip_stages(pipeline_state: Dict) -> Set[str]:
         strategies = _extract_strategies_list(strategy_result)
         protected = [
             s for s in strategies
-            if s.get("method") not in (None, "none")
+            if (s.get("recommended_method") or s.get("method")) not in (None, "none")
         ]
-        if protected and all(s.get("element_type") == "text" for s in protected):
+        if protected and all((s.get("element_type") or s.get("element")) == "text" for s in protected):
             skip.add("sam")
 
     return skip
@@ -526,6 +604,10 @@ def node_classify_intent(state: CoordinatorState, ctx: NodeContext) -> Coordinat
     pipeline_state = state.get("pipeline_state") or {}
     assessments = _extract_assessments_list(pipeline_state.get("risk_result"))
 
+    # Build conversation context for multi-turn understanding
+    conversation_tail = _build_conversation_tail(history)
+    last_action_summary = _build_last_action_summary(pipeline_state)
+
     context = {
         "current_stage": pipeline_state.get("entry_stage", "detection"),
         "element_count": len(assessments),
@@ -537,31 +619,46 @@ def node_classify_intent(state: CoordinatorState, ctx: NodeContext) -> Coordinat
             e.get("action") for e in (state.get("audit_trail") or [])[-3:]
             if isinstance(e, dict)
         ],
+        "conversation_tail": conversation_tail,
+        "last_action_summary": last_action_summary,
     }
     vlm_call_fn = _make_vlm_call_fn(ctx)
+    intent_llm = _make_intent_llm(ctx)
 
     intent = hybrid_classify(
         query=last_user_msg,
+        intent_llm=intent_llm,
         vlm_call_fn=vlm_call_fn,
         context=context,
     )
 
-    return {  # type: ignore[return-value]
-        **state,
-        "current_intent": {
-            "action": intent.action.value,
-            "target_stage": intent.target_stage,
-            "target_elements": intent.target_elements,
-            "target_element_types": intent.target_element_types,
-            "confidence": intent.confidence,
-            "method_specified": intent.method_specified,
-            "strength_parameter": intent.strength_parameter,
-            "natural_language": intent.natural_language,
-            "extracted_constraints": intent.extracted_constraints,
-            "requires_safety_check": intent.requires_safety_check,
-            "requires_checkpoint": intent.requires_checkpoint,
-        },
+    intent_dict = {
+        "action": intent.action.value,
+        "target_stage": intent.target_stage,
+        "target_elements": intent.target_elements,
+        "target_element_types": intent.target_element_types,
+        "confidence": intent.confidence,
+        "method_specified": intent.method_specified,
+        "strength_parameter": intent.strength_parameter,
+        "natural_language": intent.natural_language,
+        "extracted_constraints": intent.extracted_constraints,
+        "requires_safety_check": intent.requires_safety_check,
+        "requires_checkpoint": intent.requires_checkpoint,
     }
+
+    # If classification confidence is too low, generate a clarification prompt
+    # so that route_from_intent -> "build_response" has non-empty response_text.
+    clarification_text = ""
+    if needs_clarification(intent):
+        clarification_text = generate_clarification_prompt(intent)
+
+    result = {
+        **state,
+        "current_intent": intent_dict,
+    }
+    if clarification_text:
+        result["response_text"] = clarification_text
+    return result  # type: ignore[return-value]
 
 
 def node_handle_process(state: CoordinatorState, ctx: NodeContext) -> CoordinatorState:
@@ -592,6 +689,7 @@ def node_handle_process(state: CoordinatorState, ctx: NodeContext) -> Coordinato
         "entry_stage": "detection",
         "fallback_only": fallback_only,
         "pending_modifications": [],
+        "last_applied_modifications": [],
         "stage_timings": {},
         "errors": {},
         "phase_disagreements": [],
@@ -602,6 +700,7 @@ def node_handle_process(state: CoordinatorState, ctx: NodeContext) -> Coordinato
         **state,
         "pipeline_state": fresh_inner,
         "pipeline_action_taken": "pipeline_started",
+        "pending_challenge": None,
     }
 
 
@@ -648,21 +747,155 @@ def node_handle_modification(
             "pipeline_action_taken": "modification_failed:no_safety_kernel",
         }
 
+    # ── Handle pending challenge confirmation ────────────────────────────
+    # When a previous turn returned CHALLENGE and the user says "yes"/"no",
+    # route_from_intent redirects here with pending_challenge populated.
+    # pending_challenge is now a list of challenge dicts (M3 fix).
+    challenges_raw = state.get("pending_challenge")
+    # Normalise: accept both a single dict (legacy) and a list
+    if isinstance(challenges_raw, dict):
+        challenges_raw = [challenges_raw]
+    if challenges_raw:
+        if action == IntentAction.APPROVE.value:
+            confirmed_parts: List[str] = []
+            for challenge in challenges_raw:
+                ch_det_id = challenge["detection_id"]
+                ch_action = challenge["action"]
+                ch_method = challenge.get("method")
+                try:
+                    if ch_action == IntentAction.IGNORE.value:
+                        ch_result = apply_ignore(
+                            safety_kernel=safety_kernel,
+                            pipeline_state=pipeline_state,
+                            session_id=session_id,
+                            detection_id=ch_det_id,
+                            user_confirmed=True,
+                        )
+                    elif ch_action == IntentAction.STRENGTHEN.value:
+                        ch_result = apply_strengthen(
+                            safety_kernel=safety_kernel,
+                            pipeline_state=pipeline_state,
+                            session_id=session_id,
+                            detection_id=ch_det_id,
+                            new_method=ch_method,
+                            user_confirmed=True,
+                        )
+                    else:  # MODIFY_STRATEGY
+                        ch_result = apply_strategy_change(
+                            safety_kernel=safety_kernel,
+                            pipeline_state=pipeline_state,
+                            session_id=session_id,
+                            detection_id=ch_det_id,
+                            new_method=ch_method or "none",
+                            user_confirmed=True,
+                        )
+                    approved_value = ch_result.get("approved_value", "")
+                    pending_mods.append({
+                        "detection_id": ch_det_id,
+                        "type": ch_action,
+                        "value": approved_value,
+                        "timestamp": time.time(),
+                    })
+                    audit_trail.append({
+                        "action": f"challenge_confirmed:{ch_action}",
+                        "detection_id": ch_det_id,
+                        "value": approved_value,
+                        "timestamp": time.time(),
+                    })
+                    confirmed_parts.append(f"{ch_det_id}={approved_value}")
+                except ValueError as exc:
+                    confirmed_parts.append(f"{ch_det_id}: failed ({exc})")
+            return {  # type: ignore[return-value]
+                **state,
+                "pipeline_state": {**pipeline_state, "pending_modifications": pending_mods},
+                "audit_trail": audit_trail,
+                "pending_challenge": None,
+                "pipeline_action_taken": f"modifications_applied:{len(confirmed_parts)}",
+                "response_text": (
+                    f"Confirmed {len(confirmed_parts)} challenge(s): "
+                    f"{', '.join(confirmed_parts)}. The pipeline will re-run."
+                ),
+            }
+        else:
+            # User said "no"/reject or anything else — decline all challenges
+            return {  # type: ignore[return-value]
+                **state,
+                "pending_challenge": None,
+                "response_text": f"Challenge(s) declined. No changes applied.",
+                "pipeline_action_taken": "challenge_declined",
+            }
+
     # If no specific elements were targeted, use all applicable ones
     if not detection_ids:
         from agents.coordinator.tools import _all_strategies  # noqa: PLC0415
         strategies = _all_strategies(pipeline_state)
         element_types = intent.get("target_element_types") or []
         if element_types:
+            # Match both canonical type names (e.g. "face") and verbose
+            # descriptions (e.g. "Face (medium, high clarity)") by checking
+            # whether the element field starts with or contains the target type.
+            def _matches_type(s: Dict) -> bool:
+                el = (s.get("element_type") or s.get("element") or "").lower()
+                return any(el == t or el.startswith(t) for t in element_types)
+
             detection_ids = [
                 s.get("detection_id") for s in strategies
-                if s.get("element_type") in element_types
-                and s.get("detection_id")
+                if _matches_type(s) and s.get("detection_id")
             ]
         else:
             detection_ids = [
                 s.get("detection_id") for s in strategies if s.get("detection_id")
             ]
+
+        # Filter by current method if user referenced one (e.g., "black box" = solid_overlay)
+        constraints = intent.get("extracted_constraints") or {}
+        current_method_filter = constraints.get("current_method")
+        if current_method_filter and detection_ids:
+            from agents.coordinator.tools import _find_strategy as _fs  # noqa: PLC0415
+            filtered_ids = []
+            for did in detection_ids:
+                strat = _fs(pipeline_state, did)
+                if strat:
+                    curr = strat.get("recommended_method") or strat.get("method") or "none"
+                    if hasattr(curr, "value"):
+                        curr = curr.value
+                    if str(curr).lower() == current_method_filter.lower():
+                        filtered_ids.append(did)
+            if filtered_ids:
+                detection_ids = filtered_ids
+
+        # Fallback: if "back"/"revert" in query and no current_method filter,
+        # infer from last action's pending_modifications
+        if not current_method_filter and detection_ids:
+            query_lower = (intent.get("natural_language") or "").lower()
+            if any(word in query_lower for word in ("back", "revert", "undo", "previous", "restore")):
+                # Find the new method from the last batch of modifications
+                last_mods = pipeline_state.get("last_applied_modifications") or pipeline_state.get("pending_modifications") or []
+                logger.info(
+                    "Multi-turn 'change back' detected: last_applied_mods=%d, pending_mods=%d, detection_ids=%d",
+                    len(pipeline_state.get("last_applied_modifications") or []),
+                    len(pipeline_state.get("pending_modifications") or []),
+                    len(detection_ids),
+                )
+                if last_mods:
+                    # The last action's "value" is what elements were changed TO
+                    # That's now their CURRENT method — use it as filter
+                    last_values = set(m.get("value", "") for m in last_mods[-8:])
+                    if len(last_values) == 1:
+                        inferred_current = last_values.pop()
+                        if inferred_current and inferred_current != "none":
+                            from agents.coordinator.tools import _find_strategy as _fs2  # noqa: PLC0415
+                            filtered = []
+                            for did in detection_ids:
+                                strat = _fs2(pipeline_state, did)
+                                if strat:
+                                    curr = strat.get("recommended_method") or strat.get("method") or "none"
+                                    if hasattr(curr, "value"):
+                                        curr = curr.value
+                                    if str(curr).lower() == inferred_current.lower():
+                                        filtered.append(did)
+                            if filtered:
+                                detection_ids = filtered
 
     if not detection_ids:
         return {  # type: ignore[return-value]
@@ -676,6 +909,8 @@ def node_handle_modification(
 
     # Get preference manager from ctx if available (enhancement #4)
     preference_manager = getattr(ctx, "preference_manager", None)
+
+    pending_challenges: List[Dict[str, Any]] = []
 
     for det_id in (detection_ids or []):
         try:
@@ -701,7 +936,9 @@ def node_handle_modification(
             else:  # MODIFY_STRATEGY
                 if not new_method:
                     errors_encountered.append(
-                        f"{det_id}: No method specified for modification."
+                        f"I understood you want to change protection for this element, "
+                        f"but I couldn't determine the target method. "
+                        f"Please specify one of: blur, pixelate, solid overlay, avatar, or none."
                     )
                     continue
                 result = apply_strategy_change(
@@ -717,26 +954,41 @@ def node_handle_modification(
             approved_value = result.get("approved_value", "")
 
             if safety_action == "challenge":
-                # Surface the challenge to the user; don't apply yet
+                # Surface the challenge to the user; store for confirmation next turn
                 response_parts.append(
                     f"Warning for {det_id}: {result.get('challenge_message', '')} "
                     "Reply 'yes' to confirm."
                 )
+                # Persist the challenge so the next "yes" replays with user_confirmed=True
+                pending_challenges.append({
+                    "detection_id": det_id,
+                    "action": action,
+                    "method": new_method,
+                    "session_id": session_id,
+                    "timestamp": time.time(),
+                })
                 continue
+
+            # Get old method for multi-turn context (before preference block)
+            from agents.coordinator.tools import _find_strategy as _fstrat  # noqa: PLC0415
+            old_strat = _fstrat(pipeline_state, det_id) or {}
+            old_method = old_strat.get("recommended_method") or old_strat.get("method") or "none"
+            if hasattr(old_method, "value"):
+                old_method = old_method.value
+            old_method = str(old_method)
 
             # Record in pending_modifications
             pending_mods.append({
                 "detection_id": det_id,
                 "type": action,
                 "value": approved_value,
+                "previous_value": old_method,
                 "modification_type": mod_type.value,
                 "timestamp": time.time(),
             })
             actions_taken.append(f"{det_id}:{action}={approved_value}")
             if preference_manager is not None and action == IntentAction.MODIFY_STRATEGY.value:
-                from agents.coordinator.tools import _find_strategy  # noqa: PLC0415
-                old_strat = _find_strategy(pipeline_state, det_id) or {}
-                old_method = old_strat.get("method", "none")
+                # Reuse old_method computed above instead of re-fetching
                 if old_method != approved_value:
                     try:
                         # Find element type
@@ -788,6 +1040,7 @@ def node_handle_modification(
         **state,
         "pipeline_state": updated_pipeline_state,
         "audit_trail": audit_trail,
+        "pending_challenge": pending_challenges if pending_challenges else None,
         "pipeline_action_taken": pipeline_action,
         "response_text": " ".join(response_parts) or "No changes were applied.",
     }
@@ -808,6 +1061,9 @@ def node_handle_query(state: CoordinatorState, ctx: NodeContext) -> CoordinatorS
     detection_ids: Optional[List[str]] = intent.get("target_elements")
     pipeline_state = state.get("pipeline_state") or {}
     user_question = intent.get("natural_language", "")
+
+    # Clear any stale pending challenge (M6 fix)
+    state = {**state, "pending_challenge": None}
 
     # Element-specific explanation
     if detection_ids and len(detection_ids) == 1:
@@ -898,6 +1154,7 @@ def node_handle_approve(state: CoordinatorState, ctx: NodeContext) -> Coordinato
         "audit_trail": audit_trail,
         "pipeline_action_taken": "checkpoint_approved",
         "response_text": "Approved. The pipeline will continue.",
+        "pending_challenge": None,
     }
 
 
@@ -933,18 +1190,41 @@ def node_handle_undo(state: CoordinatorState, ctx: NodeContext) -> CoordinatorSt
             ),
         }
 
-    # Fallback: pop last pending modification
+    # Fallback: pop last pending modification and restore the strategy
     if pending_mods:
         reverted = pending_mods.pop()
+        det_id = reverted.get("detection_id")
+        previous_value = reverted.get("previous_value")
+
+        # Actually restore the strategy to its previous value
+        if det_id and previous_value:
+            from agents.coordinator.tools import _find_strategy  # noqa: PLC0415
+            strat = _find_strategy(pipeline_state, det_id)
+            if strat is not None and isinstance(strat, dict):
+                strat["recommended_method"] = previous_value
+            elif strat is not None and hasattr(strat, "recommended_method"):
+                from utils.models import ObfuscationMethod  # noqa: PLC0415
+                try:
+                    strat.recommended_method = ObfuscationMethod(previous_value)
+                except ValueError:
+                    strat.recommended_method = previous_value
+
         audit_trail.append({
             "action": "undo",
             "reverted": reverted,
             "timestamp": time.time(),
         })
-        response = (
-            f"Reverted: {reverted.get('type', 'modification')} on "
-            f"{reverted.get('detection_id', 'element')}."
-        )
+        if det_id and previous_value:
+            response = (
+                f"Reverted: {reverted.get('type', 'modification')} on "
+                f"{det_id} (restored method to {previous_value})."
+            )
+        else:
+            response = (
+                f"Reverted: {reverted.get('type', 'modification')} on "
+                f"{reverted.get('detection_id', 'element')}. "
+                f"Note: no previous value recorded; strategy may need manual correction."
+            )
     else:
         response = "Nothing to undo -- no recent modifications or snapshots found."
 
@@ -1024,6 +1304,10 @@ def node_run_pipeline(state: CoordinatorState, ctx: NodeContext) -> CoordinatorS
         entry_stage = pipeline_state.get("entry_stage", "detection")
 
     pipeline_state["entry_stage"] = entry_stage
+
+    # Preserve last applied modifications for multi-turn context ("change it back")
+    if pipeline_state.get("pending_modifications"):
+        pipeline_state["last_applied_modifications"] = list(pipeline_state["pending_modifications"])
 
     # Clear pending modifications once we start running
     pipeline_state["pending_modifications"] = []
@@ -1273,7 +1557,7 @@ def node_build_response(state: CoordinatorState, ctx: NodeContext) -> Coordinato
             strats = _extract_strategies_list(strategy_result)
 
             n_protected = sum(
-                1 for s in strats if s.get("method") not in {None, "none"}
+                1 for s in strats if (s.get("recommended_method") or s.get("method")) not in {None, "none"}
             )
             n_critical = sum(
                 1 for a in assessments if a.get("severity", "").lower() == "critical"
@@ -1290,6 +1574,51 @@ def node_build_response(state: CoordinatorState, ctx: NodeContext) -> Coordinato
                 suggestions.append(
                     "The protected image is ready for download."
                 )
+
+    # Enhance response with ResponseGenerator if text_llm is available
+    if ctx.text_llm is not None and current_response:
+        try:
+            from agents.coordinator.response_generator import ResponseGenerator  # noqa: PLC0415
+
+            rg = ResponseGenerator(text_llm=ctx.text_llm)
+            assessments = _extract_assessments_list(pipeline_state.get("risk_result"))
+            strats = _extract_strategies_list(pipeline_state.get("strategy_result"))
+            timings = pipeline_state.get("stage_timings") or {}
+
+            pipeline_summary = {
+                "total_elements": len(assessments),
+                "protected_count": sum(
+                    1 for s in strats
+                    if (s.get("recommended_method") or s.get("method")) not in {None, "none"}
+                ),
+                "critical_count": sum(
+                    1 for a in assessments if a.get("severity", "").lower() == "critical"
+                ),
+                "total_time_ms": sum(timings.values()),
+                "protected_image_path": pipeline_state.get("protected_image_path"),
+                "errors": pipeline_state.get("errors") or {},
+                "action_details": current_response,
+                "action_taken": state.get("pipeline_action_taken", ""),
+            }
+
+            conversation_tail = list(state.get("conversation_history") or [])[-4:]
+            action_taken = state.get("pipeline_action_taken", "")
+
+            enhanced = rg.generate(
+                action_taken=action_taken,
+                pipeline_summary=pipeline_summary,
+                conversation_tail=conversation_tail,
+                intent_action=action,
+                details=current_response,
+            )
+            if enhanced:
+                current_response = enhanced
+
+            rg_suggestions = rg.generate_suggestions(pipeline_summary, action_taken)
+            if rg_suggestions:
+                suggestions = rg_suggestions
+        except Exception as exc:
+            logger.debug("ResponseGenerator enhancement failed: %s", exc)
 
     # Append to conversation history
     history = list(state.get("conversation_history") or [])
@@ -1336,6 +1665,12 @@ def route_from_intent(state: CoordinatorState) -> str:
         except Exception:
             pass
 
+    # If there is a pending safety challenge and the user says "yes" or "no",
+    # route to handle_modification so it can resolve the challenge there
+    # (retry with user_confirmed=True or decline) instead of HITL approve/undo.
+    if state.get("pending_challenge") and action in ("approve", "reject"):
+        return "handle_modification"
+
     routing_map = {
         "process":          "handle_process",
         "modify_strategy":  "handle_modification",
@@ -1347,6 +1682,17 @@ def route_from_intent(state: CoordinatorState) -> str:
         "undo":             "handle_undo",
     }
     return routing_map.get(action, "handle_query")
+
+
+def route_after_modification(state: CoordinatorState) -> str:
+    """
+    After handle_modification: if modifications were applied, re-run the pipeline
+    from the appropriate stage. Otherwise go straight to build_response.
+    """
+    action = state.get("pipeline_action_taken") or ""
+    if action.startswith("modifications_applied"):
+        return "run_pipeline"
+    return "build_response"
 
 
 def route_after_pipeline(state: CoordinatorState) -> str:
@@ -1435,8 +1781,12 @@ def build_coordinator_graph(ctx: NodeContext):
         {"build_response": "build_response"},
     )
 
-    # All handlers -> build_response (except handle_process which goes to run_pipeline)
-    graph.add_edge("handle_modification", "build_response")
+    # handle_modification -> run_pipeline (if modifications applied) or build_response
+    graph.add_conditional_edges(
+        "handle_modification",
+        route_after_modification,
+        {"run_pipeline": "run_pipeline", "build_response": "build_response"},
+    )
     graph.add_edge("handle_query",        "build_response")
     graph.add_edge("handle_approve",      "build_response")
     graph.add_edge("handle_undo",         "build_response")
@@ -1465,7 +1815,7 @@ class _FallbackCoordinator:
     def __init__(self, ctx: NodeContext) -> None:
         self._ctx = ctx
 
-    def invoke(self, state: CoordinatorState) -> CoordinatorState:
+    def invoke(self, state: CoordinatorState, **kwargs) -> CoordinatorState:
         ctx = self._ctx
         state = node_classify_intent(state, ctx)
 
@@ -1478,6 +1828,10 @@ class _FallbackCoordinator:
             state = node_check_hitl(state, ctx)
         elif route == "handle_modification":
             state = node_handle_modification(state, ctx)
+            # Auto re-run pipeline if modifications were applied
+            if route_after_modification(state) == "run_pipeline":
+                state = node_run_pipeline(state, ctx)
+                state = node_check_hitl(state, ctx)
         elif route == "handle_approve":
             state = node_handle_approve(state, ctx)
         elif route == "handle_undo":
@@ -1492,5 +1846,5 @@ class _FallbackCoordinator:
         return state
 
     # Make it behave like a compiled LangGraph app
-    def __call__(self, state: CoordinatorState) -> CoordinatorState:
-        return self.invoke(state)
+    def __call__(self, state: CoordinatorState, **kwargs) -> CoordinatorState:
+        return self.invoke(state, **kwargs)

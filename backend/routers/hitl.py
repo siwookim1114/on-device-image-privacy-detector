@@ -203,22 +203,42 @@ async def chat(
         if hasattr(session_record, "image_path") and session_record.image_path:
             coordinator.set_image_path(session_record.image_path)
 
+        # Inject pipeline results so HITL commands can find elements.
+        # get_pipeline_state() returns a copy, so we modify the internal
+        # state directly via _state["pipeline_state"].
+        ps = coordinator._state.get("pipeline_state")
+        if ps is not None:
+            if getattr(session_record, "detections", None) is not None:
+                ps["detections"] = session_record.detections
+            if getattr(session_record, "risk_result", None) is not None:
+                ps["risk_result"] = session_record.risk_result
+            if getattr(session_record, "strategy_result", None) is not None:
+                ps["strategy_result"] = session_record.strategy_result
+            if getattr(session_record, "execution_report", None) is not None:
+                ps["execution_report"] = session_record.execution_report
+
         # Restore conversation history from session record if present
         if hasattr(session_record, "coordinator_history") and session_record.coordinator_history:
             coordinator._state["conversation_history"] = list(
                 session_record.coordinator_history
             )
 
-        result = await coordinator.handle_message(
-            message=body.message,
-            user_confirmed=body.user_confirmed,
-        )
+        result = coordinator.handle_message(message=body.message)
 
         # Persist conversation history back to session record
         if session_record is not None and hasattr(session_record, "coordinator_history"):
             session_record.coordinator_history = coordinator.get_conversation_history()
         if session_record is not None and hasattr(session_record, "last_intent"):
             session_record.last_intent = result["intent"].get("action")
+
+        # Persist pipeline results so the next turn can find elements
+        ps_out = coordinator._state.get("pipeline_state")
+        if ps_out and session_record is not None:
+            for key in ("detections", "risk_result", "strategy_result", "execution_report",
+                        "protected_image_path", "seg_results"):
+                val = ps_out.get(key)
+                if val is not None and hasattr(session_record, key):
+                    setattr(session_record, key, val)
 
         from backend.schemas.responses import ParsedIntentResponse
         return ChatResponse(

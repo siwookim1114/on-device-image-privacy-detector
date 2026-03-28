@@ -547,6 +547,7 @@ class PipelineOutput(BaseModel):
     protected_image_path: Optional[str] = None
     provenance_log: Optional[ProvenanceLog] = None
     risk_analysis: Optional[RiskAnalysisResult] = None
+    strategy_recommendations: Optional[StrategyRecommendations] = None
     execution_report: Optional[ExecutionReport] = None
     total_time_ms: float = 0.0
     error_message: Optional[str] = None
